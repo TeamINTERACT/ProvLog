@@ -14,9 +14,10 @@ Options:
     -m            Monitor current validity of FILE
     -V            Print version information
 """
-import os      # for accessing local file system
-import hashlib # for generating MD5 hashes
-import socket  # for accessing hostname of current machine
+import os        # for accessing local file system
+import hashlib   # for generating MD5 hashes
+import socket    # for accessing hostname of current machine
+import datetime  # for adding date stamp to log records 
 from docopt import docopt # for processing command line args
 
 """
@@ -169,7 +170,7 @@ def compute_fingerprint(targfile):
     """
     Given a path to a file, compute the MD5 checksum of that
     target, and do so in a manner that is efficient for large
-    files.
+    files. Returns the hexdigest string of the computed checksum.
     """
     blk_size_to_read = 65536
     filehash = hashlib.md5()
@@ -195,27 +196,51 @@ def save_prvlog_file(content, prvfile):
         fh.write(f"^{computed_fingerprint}\n")
 
 
+def prompt_for_log_entry(prompt=''):
+    """
+    Ask the user to provide a string describing the current
+    version of the target file.  
+    Returns the provided string in the form of a PRVFILE comment
+    entry.
+    """
+    if not prompt:
+        prompt = "Describe changes made to the target file: "
+    desc = input(prompt.strip() + ' ')
+    return desc
+
+
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
 
     prvfile = args['PRVFILE']
     if os.path.isfile(prvfile):
-        if not verify_contents(prvfile):
+        if verify_contents(prvfile):
+            print("Log file is internally consistent.")
+        else:
             exit()
     else:
-        print(f"File does not exist '{prvfile}'")
+        print(f"Log file '{prvfile}' does not exist")
 
     if args['-c']:
         targfile = args['-c']
         if os.path.isfile(prvfile):
-            print(f"File '{prvfile}' already exists. Cannot proceed.")
+            print(f"Log file '{prvfile}' already exists. Cannot proceed.")
             exit()
-        fing = compute_fingerprint(targfile)
+        print(f"Creating new log file in {prvfile}.")
+        # assemble the header row info
+        fingerprint = compute_fingerprint(targfile)
         uri = f"{socket.gethostname()}://{os.path.abspath(targfile)}"
+        headline = f"{fingerprint}  {uri}\n"
 
-        content = f"{fing}  {uri}\n"
+        # assemble the log comment for this first version
+        datestr = datetime.date.today().strftime("%Y-%m-%d %H:%M:%D")
+        origin = prompt_for_log_entry("Describe origin of the target file: ")
+        logline = f"@ {datestr} {origin}\n"
+        logstamp = f"< {datestr} {headline}\n"
+
+        content = f"{headline}{logline}{logstamp}"
         save_prvlog_file(content, prvfile)
-        print("File created.")
+        print("Log file created.")
         exit()
 
     if args['-u']:
