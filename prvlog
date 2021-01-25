@@ -11,7 +11,7 @@ Options:
     -c TARGFILE   Create PRVFILE log for target TARGFILE
     -u            Update PRVFILE, adding new MD5 checksum if it has changed
     -l MSG        Log a new MSG to the provenance chain in PRVFILE
-    -m            Monitor current validity of FILE
+    -f            Monitor current validity of FILE
     -V            Print version information
 """
 import os        # for accessing local file system
@@ -39,15 +39,15 @@ prvlog <FILE> -l 'MSG'
 prvlog <FILE> -c OTHERFILE
     Create FILE.prvlog using OTHERFILE as MD5 checksum    
 
-prvlog <FILE> -m
+prvlog <FILE> -f
     Run the script in monitor mode, ending silently if the
-    current MD5 matches the expected value, or reporting a
+    current MD5 matches the expected fingerprint, or reporting a
     problem to STDIO if one occurs.  This mode is used by 
     prvscan to produce its reports.
 
 prvscan [ROOTDIR] [-r]
     Scan ROOTDIR for *.prvlog files.
-    For each FILE.prvlog found, run `prvlog FILE -m` and 
+    For each FILE.prvlog found, run `prvlog FILE -f` and 
     Defaults to current directory, non-recursive.
     relay any reported errors to STDIO.
 
@@ -141,9 +141,9 @@ prv log -c CHKSUMFILE PRVFILE
 prv verify PRVFILE
 """
 
-def verify_contents(filepath):
+def verify_prvlog_contents(filepath):
     """
-    Given a filehandle, parse the contents and verify its fingerprint.
+    Given a filehandle to a prvlog file, parse the contents and verify its fingerprint.
     Returns True if file is validated.
     Prints warning and returns False if file is not validated.
     """
@@ -158,13 +158,24 @@ def verify_contents(filepath):
                 if saved_fingerprint == computed_fingerprint:
                     return True
                 else:
-                    print("Calculated fingerprint does not match saved.")
+                    print("Calculated fingerprint does not match expected fingerprint.")
                     print(f"{saved_fingerprint} != {computed_fingerprint}")
                     return False
             content += line
         print("No integrity fingerprint found. File is not valid.")
         return False
 
+
+def verify_target_file(filepath, expected_fingerprint):
+    """
+    Given a filehandle to a target file and a known fingerprint,
+    compute a fingerprint for the content of the target and ensure  
+    that it matches the expected.
+    Returns True if file is validated.
+    Returns False if file is not validated.
+    """
+    calculated_fingerprint = compute_fingerprint(filepath)
+    return calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
 
 def compute_fingerprint(targfile):
     """
@@ -209,17 +220,51 @@ def prompt_for_log_entry(prompt=''):
     return desc
 
 
+def unpack_log_file(fpath):
+    """
+    Given a path to a prvlog file, unpack it and return
+    headline, comments, validationline
+    """
+    lines = []
+    with open(fpath, 'r') as fh:
+        for line in fh.readlines():
+            if line.strip():
+                lines.append(line)
+    headline = lines[0]
+    content = lines[1:-1]
+    validationline = lines[-1]
+    return (headline, content, validationline)
+
+
+def unpack_uri(targetpath):
+    """
+    Given a uri of the form machine://path, split it up and
+    return machinename, abspath
+    """
+    if not ':' in targetpath:
+        print("Malformed target path.")
+        return None, None
+    machine,dum,fileuri = targetpath.partition(':')
+    if not fileuri.startswith('///'):
+        print("Malformed target path.")
+        return None, None
+    abspath = fileuri[2:].strip() #remove trailing newline
+    return machine,abspath
+
+
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
 
     prvfile = args['PRVFILE']
     if os.path.isfile(prvfile):
-        if verify_contents(prvfile):
+        if verify_prvlog_contents(prvfile):
             print("Log file is internally consistent.")
         else:
-            exit()
+            exit(1)
     else:
         print(f"Log file '{prvfile}' does not exist")
+
+    current_machine = socket.gethostname()
 
     if args['-c']:
         targfile = args['-c']
@@ -229,7 +274,7 @@ if __name__ == "__main__":
         print(f"Creating new log file in {prvfile}.")
         # assemble the header row info
         fingerprint = compute_fingerprint(targfile)
-        uri = f"{socket.gethostname()}://{os.path.abspath(targfile)}"
+        uri = f"{current_machine}://{os.path.abspath(targfile)}"
         headline = f"{fingerprint}  {uri}\n"
 
         # assemble the log comment for this first version
@@ -245,10 +290,43 @@ if __name__ == "__main__":
 
     if args['-u']:
         # -u            Update PRVFILE, adding new MD5 checksum if it has changed
+        # read old content
+        # extract headline
+        # compute new headline
+        # query user for new comment
+        # assemble new content
+        # compute validation fingerprint for new content
+        # write new version of file
         pass
+
     if args['-l']:
         # -l MSG        Log a new MSG to the provenance chain in PRVFILE
+        # read old content
+        # extract headline
+        # query user for new comment
+        # assemble new content
+        # compute validation fingerprint for new content
+        # write new version of file
         pass
-    if args['-m']:
-        # -m            Monitor current validity of FILE
-        pass
+
+    if args['-f']:
+        # -f            Monitor current validity of FILE
+        # read old content
+        headline,content,validationline = unpack_log_file(prvfile)
+        # extract fingerprint and target path from headline
+        [expected_fingerprint, targetpath] = headline.split()
+        # verify machine name
+        machine,abspath = unpack_uri(targetpath)
+        if not os.path.isfile(abspath):
+            print(f"Target file '{abspath}' does not exist.")
+            exit(2)
+        print(f"Target file exists.")
+        if machine != current_machine:
+            print(f"Target file {abspath} has moved to host {current_machine} from {machine}")
+            exit(3)
+        print("Machine names match.")
+        if not verify_target_file(abspath, expected_fingerprint):
+            print("{targetpath} does not match current fingerprint recorded in {prvfile}")
+            exit(4)
+        print("Fingerprints match.")
+        exit(0)
