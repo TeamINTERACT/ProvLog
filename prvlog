@@ -8,15 +8,16 @@ Usage:
   prvlog -V 
 
 Options:
+    -c TARGFILE   Create PRVFILE log for target TARGFILE
     -u            Update PRVFILE, adding new MD5 checksum if it has changed
     -l MSG        Log a new MSG to the provenance chain in PRVFILE
-    -c OTHERFILE  Create a new prvlog file using OTHERFILE as MD5 source
     -m            Monitor current validity of FILE
     -V            Print version information
 """
-import os
-import hashlib
-from docopt import docopt
+import os      # for accessing local file system
+import hashlib # for generating MD5 hashes
+import socket  # for accessing hostname of current machine
+from docopt import docopt # for processing command line args
 
 """
 prvlog <FILE>
@@ -43,9 +44,10 @@ prvlog <FILE> -m
     problem to STDIO if one occurs.  This mode is used by 
     prvscan to produce its reports.
 
-prvscan <ROOTDIR> [-r]
+prvscan [ROOTDIR] [-r]
     Scan ROOTDIR for *.prvlog files.
     For each FILE.prvlog found, run `prvlog FILE -m` and 
+    Defaults to current directory, non-recursive.
     relay any reported errors to STDIO.
 
     -r: scan recursively
@@ -162,24 +164,65 @@ def verify_contents(filepath):
         print("No integrity fingerprint found. File is not valid.")
         return False
 
+
+def compute_fingerprint(targfile):
+    """
+    Given a path to a file, compute the MD5 checksum of that
+    target, and do so in a manner that is efficient for large
+    files.
+    """
+    blk_size_to_read = 65536
+    filehash = hashlib.md5()
+    with open(targfile, 'rb') as f:
+        while (True):
+            read_data = f.read(blk_size_to_read)
+            if not read_data:
+                break
+            filehash.update(read_data)
+        fing = filehash.hexdigest()
+        return fing
+    return None
+
+
+def save_prvlog_file(content, prvfile):
+    """
+    Given some content and a filepath, save the content to the
+    filepath and append a content checksum.
+    """
+    computed_fingerprint = hashlib.md5(content.encode('utf-8')).hexdigest()
+    with open(prvfile, 'w') as fh:
+        fh.write(content)
+        fh.write(f"^{computed_fingerprint}\n")
+
+
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
 
     prvfile = args['PRVFILE']
-    if not os.path.isfile(prvfile):
+    if os.path.isfile(prvfile):
+        if not verify_contents(prvfile):
+            exit()
+    else:
         print(f"File does not exist '{prvfile}'")
 
-    verify_contents(prvfile)
-    exit()
+    if args['-c']:
+        targfile = args['-c']
+        if os.path.isfile(prvfile):
+            print(f"File '{prvfile}' already exists. Cannot proceed.")
+            exit()
+        fing = compute_fingerprint(targfile)
+        uri = f"{socket.gethostname()}://{os.path.abspath(targfile)}"
+
+        content = f"{fing}  {uri}\n"
+        save_prvlog_file(content, prvfile)
+        print("File created.")
+        exit()
 
     if args['-u']:
         # -u            Update PRVFILE, adding new MD5 checksum if it has changed
         pass
     if args['-l']:
         # -l MSG        Log a new MSG to the provenance chain in PRVFILE
-        pass
-    if args['-c']:
-        # -c OTHERFILE  Create a new prvlog file using OTHERFILE as MD5 source
         pass
     if args['-m']:
         # -m            Monitor current validity of FILE
