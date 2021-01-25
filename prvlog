@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Tool for updating and validating ProvenanceLogger (prvlog) files.
+
+Usage:
+  prvlog [options] PRVFILE
+  prvlog -V 
+
+Options:
+    -u            Update PRVFILE, adding new MD5 checksum if it has changed
+    -l MSG        Log a new MSG to the provenance chain in PRVFILE
+    -c OTHERFILE  Create a new prvlog file using OTHERFILE as MD5 source
+    -m            Monitor current validity of FILE
+    -V            Print version information
+"""
+import os
+import hashlib
+from docopt import docopt
+
+"""
+prvlog <FILE>
+    If FILE.prvlog already exists, validate its content before 
+    continuing. Abort with explanation if not valid.
+
+    Computes the MD5SUM of FILE and prepares to update FILE.prvlog.
+
+    If FILE.prvlog already exists, compares computed MD5 to previous
+    fingerprint recorded in FILE.prvlog. 
+        If the checksum has changed, prompts the user for a note about why.
+        If the checksum has not changed, informs users and terminates.
+
+prvlog <FILE> -l 'MSG'
+    Add a new comment record to FILE.prvlog, with checksum, and
+    then recompute closing validation checksum
+
+prvlog <FILE> -c OTHERFILE
+    Create FILE.prvlog using OTHERFILE as MD5 checksum    
+
+prvlog <FILE> -m
+    Run the script in monitor mode, ending silently if the
+    current MD5 matches the expected value, or reporting a
+    problem to STDIO if one occurs.  This mode is used by 
+    prvscan to produce its reports.
+
+prvscan <ROOTDIR> [-r]
+    Scan ROOTDIR for *.prvlog files.
+    For each FILE.prvlog found, run `prvlog FILE -m` and 
+    relay any reported errors to STDIO.
+
+    -r: scan recursively
+
+It is up to the operator to add prvscan to a crontab if
+continuous checking is needed.
+"""
+
+"""
+28431f3f8ae3397d957f04150b1eff91  hostname://path/to/file/VIC_W2_Eth_ToP_5min_20210115.zip
+@ 2021-01-20 11:22:17 Original file creation. 
+< 2021-01-20 11:22:17 28431f3f8ae3397d957f04150b1eff91  hostname://path/to/file/VIC_W2_Eth_ToP_5min_20210115.zip
+^80e0d410f20b970439a2e8133de7781f
+
+Structure of a .PRVLOG file:
+    Top line is always: MD5SUM  FNAME
+        Represents most recent checksum of the subject file
+        This top line was intentionally designed to reflect the
+        common format of checksum files, so that pre-existing 
+        checksums can be grandfathered into the PRV chain. 
+
+        But a runtime warning will be issued by the prv system
+        if that line does not contain a machine name and ://
+        prefix. This is to give the operator a chance to update that
+        entry with more complete information. In practice, however, this
+        information is sometimes not available, so if it is not
+        remediated, the historical information will be transfered as is to the
+        comment section and the new top line will contain proper machine
+        and prefix syntax. (Or possibly record it with the key value UNKNOWN for 
+        machine name.)
+                
+    Followed by any number of comment entries.
+
+    Comment consists of an @ line and a < line.
+
+    @ Is a timestamped comment regarding a provenance/integrity change.
+
+    < Is a timestamped snapshot of the checksum and file path taken from 
+      top line of this file prior to adding this comment.
+
+    Last line of the file is the ^ line, which is just the checksum of all the lines of this file, prior to this line.
+
+    Any operation on this file will fail with a warning message
+    if the ^ line does not match the previous content.
+
+So every distinct variant in the lineage of FILE is documented in
+the PRV file, including its checksum value and its fully
+normalized storage path and name. (Which will help us locate
+backups of that file on those previous machines, if nec.)
+
+In addition, this file also serves as its own checksum record.
+
+PRV Scanning:
+    On a PRV-enabled computer, a service runs on a regular schedule,
+    searching for .prv files and verifying that the active checksum
+    value for its subject file is still valid, and that the
+    self-checksum at the end is also still valid.
+
+    If the subject file checksum is ever found to be incorrect, the
+    operator is notified. 
+
+    If the mismatch is caused by an accidental alteration, the file
+    can be restored and no changes are required to the PRV file. But
+    if the alteration was intentional, then the operator issues
+    another prv change, which updates the PRV file, along with an
+    explanation of the change.
+
+    For data stored in non-atomic form, such as tables in a DB, there
+    is no simple way to run a PRV-scan. Instead, a regularly scheduled 
+    pre-prv script can be run to generate a DB-fingerprint file of the 
+    table, which can then be tracked within the PRV system.
+
+    (Alternatively, the table could be intuited from the path and
+recomputed at verification time, but that would require the PRV
+system to have an extensible scripting system to let it probe
+paths on different DBs and protocols. It's simpler to leave that
+to the operator to set up in an independent cron job.)
+
+
+For files that can be accommodated within git, some of these
+features are redundant. After all, git can tell you when a file
+has been changed. Unfortunately, git does not play nicely with
+enormous datasets, cannot provide much information about the
+nature of a change to binary content, and does not have access to
+provenance history before it was first moved into git control on 
+this machine.
+
+prv log PRVFILE
+prv log -c CHKSUMFILE PRVFILE
+prv verify PRVFILE
+"""
+
+def verify_contents(filepath):
+    """
+    Given a filehandle, parse the contents and verify its fingerprint.
+    Returns True if file is validated.
+    Prints warning and returns False if file is not validated.
+    """
+    with open(filepath, 'r') as fh:
+        content = ''
+        for line in fh.readlines():
+            if line[0] == '^': # is this the validation fingerprint?
+                saved_fingerprint = line[1:].strip()
+                computed_fingerprint = hashlib.md5(content.encode('utf-8')).hexdigest()
+                # print(f"Saved: {saved_fingerprint}")
+                # print(f"Calcd: {computed_fingerprint}")
+                if saved_fingerprint == computed_fingerprint:
+                    return True
+                else:
+                    print("Calculated fingerprint does not match saved.")
+                    print(f"{saved_fingerprint} != {computed_fingerprint}")
+                    return False
+            content += line
+        print("No integrity fingerprint found. File is not valid.")
+        return False
+
+if __name__ == "__main__":
+    args = docopt(__doc__, version='0.1.1')
+
+    prvfile = args['PRVFILE']
+    if not os.path.isfile(prvfile):
+        print(f"File does not exist '{prvfile}'")
+
+    verify_contents(prvfile)
+    exit()
+
+    if args['-u']:
+        # -u            Update PRVFILE, adding new MD5 checksum if it has changed
+        pass
+    if args['-l']:
+        # -l MSG        Log a new MSG to the provenance chain in PRVFILE
+        pass
+    if args['-c']:
+        # -c OTHERFILE  Create a new prvlog file using OTHERFILE as MD5 source
+        pass
+    if args['-m']:
+        # -m            Monitor current validity of FILE
+        pass
