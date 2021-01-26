@@ -5,13 +5,15 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
+  prvlog -h 
   prvlog -V 
 
 Options:
+    -h            Display this help information
     -c            Check that PRVFILE is up-to-date and valid
-    -t TARGFILE   Create new PRVFILE log for target TARGFILE
+    -t TARGFILE   Create new PRVFILE sidecar log for target TARGFILE
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
-    -l            Prompt user for a new log msg for the provenance chain in PRVFILE
+    -l            Prompt user for a new log msg to add to the record
     -V            Print version information
 """
 import os        # for accessing local file system
@@ -21,40 +23,11 @@ import datetime  # for adding date stamp to log records
 from docopt import docopt # for processing command line args
 
 """
-prvlog <FILE>
-    If FILE.prvlog already exists, validate its content before 
-    continuing. Abort with explanation if not valid.
-
-    Computes the MD5SUM of FILE and prepares to update FILE.prvlog.
-
-    If FILE.prvlog already exists, compares computed MD5 to previous
-    fingerprint recorded in FILE.prvlog. 
-        If the checksum has changed, prompts the user for a note about why.
-        If the checksum has not changed, informs users and terminates.
-
-prvlog <FILE> -l 'MSG'
-    Add a new comment record to FILE.prvlog, with checksum, and
-    then recompute closing validation checksum
-
-prvlog <FILE> -t OTHERFILE
-    Create FILE.prvlog using OTHERFILE as MD5 checksum    
-
-prvlog <FILE> -c
-    Run the script in monitor mode, ending silently if the
-    current MD5 matches the expected fingerprint, or reporting a
-    problem to STDIO if one occurs.  This mode is used by 
-    prvscan to produce its reports.
-
-prvscan [ROOTDIR] [-r]
-    Scan ROOTDIR for *.prvlog files.
-    For each FILE.prvlog found, run `prvlog FILE -c` and 
-    Defaults to current directory, non-recursive.
-    relay any reported errors to STDIO.
-
+ROADMAP
     -r: scan recursively
 
-It is up to the operator to add prvscan to a crontab if
-continuous checking is needed.
+    It is up to the operator to add prvscan to a crontab if
+    continuous checking is needed.
 """
 
 """
