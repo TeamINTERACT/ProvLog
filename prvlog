@@ -158,7 +158,7 @@ def verify_prvlog_contents(filepath):
                 if saved_fingerprint == computed_fingerprint:
                     return True
                 else:
-                    print("Log file not well-formed. Internal checksums do not match.")
+                    print("Log file content not well-formed.  Internal checksums mismatched.")
                     return False
             content += line
         print("No integrity fingerprint found. File is not valid.")
@@ -227,17 +227,17 @@ def prompt_for_log_entry(prompt=''):
 def unpack_log_file(fpath):
     """
     Given a path to a prvlog file, unpack it and return
-    headline, comments, validationline
+    targetline, comments, validationline
     """
     lines = []
     with open(fpath, 'r') as fh:
         for line in fh.readlines():
             if line.strip():
                 lines.append(line)
-    headline = lines[0]
+    targetline = lines[0]
     content = ''.join(lines[1:-1])
     validationline = lines[-1]
-    return (headline, content, validationline)
+    return (targetline, content, validationline)
 
 
 def unpack_uri(targetpath):
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     prvfile = args['PRVFILE']
     if os.path.isfile(prvfile):
         if verify_prvlog_contents(prvfile):
-            print("Log file is well-formed.")
+            print("Log file content is well-formed.")
         else:
             exit(1)
     else:
@@ -282,7 +282,7 @@ if __name__ == "__main__":
         targetline = f"{fingerprint}  {uri}"
 
         # assemble the log comment for this first version
-        datestr = datetime.date.today().strftime("%Y-%m-%d %H:%M:%D")
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         origin = prompt_for_log_entry("Describe origin of the target file: ")
         logline = f"@ {datestr} {origin}"
         logstamp = f"< {datestr} {targetline}"
@@ -297,19 +297,29 @@ if __name__ == "__main__":
 
     if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
         # read old content
-        # extract headline
-        # compute new headline
+        targetline,oldlogs,validationline = unpack_log_file(prvfile)
+        machine,targfile = unpack_uri(targetline.split()[1])
+        # compute new targetline
+        fingerprint = compute_fingerprint(targfile)
+        uri = f"{current_machine}://{os.path.abspath(targfile)}"
+        targetline = f"{fingerprint}  {uri}"
         # query user for new comment
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        origin = prompt_for_log_entry("Log message to add: ")
+        logline = f"@ {datestr} {origin}"
+        logstamp = f"< {datestr} {targetline}"
         # assemble new content
-        # compute validation fingerprint for new content
+        newlog = f"{logline}\n{logstamp}"
         # write new version of file
-        pass
+        save_prvlog_file(targetline,oldlogs,newlog, prvfile)
+        print("Log file updated.")
+        exit()
 
     if args['-l']: # Log a new comment to the provenance chain in PRVFILE
         # First verify that the existing fingerprint is valid.
         # read and verify prvlog before altering it
-        headline,oldlogs,validationline = unpack_log_file(prvfile)
-        [expected_fingerprint, targetpath] = headline.split()
+        targetline,oldlogs,validationline = unpack_log_file(prvfile)
+        [expected_fingerprint, targetpath] = targetline.split()
         machine,abspath = unpack_uri(targetpath)
         if not os.path.isfile(abspath) \
         or machine != current_machine \
@@ -319,35 +329,36 @@ if __name__ == "__main__":
 
         # fingerprint is valid, so continue
         # assemble the log comment to be added
-        datestr = datetime.date.today().strftime("%Y-%m-%d %H:%M:%D")
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         origin = prompt_for_log_entry("Log message to add: ")
         logline = f"@ {datestr} {origin}"
-        logstamp = f"< {datestr} {headline}"
+        logstamp = f"< {datestr} {targetline}"
         # assemble new content
         newlog = f"{logline}\n{logstamp}"
         # save the updated file
-        save_prvlog_file(headline, oldlogs, newlog, prvfile)
+        save_prvlog_file(targetline, oldlogs, newlog, prvfile)
         print("Log message added.")
         exit()
 
     if args['-c']:
         # -c    Check target fingerprint
         # read old content
-        headline,content,validationline = unpack_log_file(prvfile)
-        # extract fingerprint and target path from headline
-        [expected_fingerprint, targetpath] = headline.split()
+        targetline,content,validationline = unpack_log_file(prvfile)
+        # extract fingerprint and target path from targetline
+        [expected_fingerprint, targetpath] = targetline.split()
         # verify machine name
         machine,abspath = unpack_uri(targetpath)
         if not os.path.isfile(abspath):
-            print(f"Target file '{abspath}' does not exist.")
+            print(f"  Target file '{abspath}' does not exist.")
             exit(2)
-        print(f"Target file exists.")
+        print(f"  Target file exists.")
         if machine != current_machine:
-            print(f"Target file {abspath} has moved to host {current_machine} from {machine}")
+            print(f"  Target file {abspath} has moved to host {current_machine} from {machine}")
             exit(3)
-        print("Machine names match.")
+        print("  Machine names match.")
         if not verify_target_file(abspath, expected_fingerprint):
-            print(f"{targetpath} does not match current fingerprint recorded in {prvfile}")
+            print(f"  {targetpath} does not match current fingerprint recorded in {prvfile}")
             exit(4)
-        print("Fingerprints match.")
+        print("  Fingerprints match.")
+        print(f"{prvfile} is up to date.")
         exit(0)
