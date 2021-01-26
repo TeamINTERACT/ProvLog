@@ -5,7 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog (-s TARGDIR | -S TARGDIR)
+  prvlog [-v] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
 
@@ -17,6 +17,7 @@ Options:
     -l            Prompt user for a new log msg to add to the record
     -s TARGDIR    Scan a directory and check all *.prvlog files found
     -S TARGDIR    Same as -s, but scans directories recursively
+    -v            Display verbose output
     -V            Print version information
 """
 import os        # for accessing local file system
@@ -116,6 +117,13 @@ prv log PRVFILE
 prv log -t CHKSUMFILE PRVFILE
 prv verify PRVFILE
 """
+
+verbose = False
+
+def mention(outstr):
+    global verbose
+    if verbose:
+        print(outstr)
 
 def verify_prvlog_contents(filepath):
     """
@@ -222,11 +230,11 @@ def unpack_uri(targetpath):
     return machinename, abspath
     """
     if not ':' in targetpath:
-        # print("Malformed target path.")
+        mention("Malformed target path.")
         return None, None
     machine,dum,fileuri = targetpath.partition(':')
     if not fileuri.startswith('///'):
-        # print("Malformed target path.")
+        mention("Malformed target path.")
         return None, None
     abspath = fileuri[2:].strip() #remove trailing newline
     return machine,abspath
@@ -264,6 +272,7 @@ def check_prvfile_matches_its_target(prvfile):
 
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
+    verbose = args['-v']
 
     current_machine = socket.gethostname()
 
@@ -298,12 +307,12 @@ if __name__ == "__main__":
                 break
 
         if failures:
-            print(f"{len(successes)+len(failures)} *.prvlog files found.")
-            print(f"{len(successes)} validated successfully.")
-            print(f"{len(failures)} files failed to validate:")
-            print('\n'.join(['  '+x for x in failures]))
+            mention(f"{len(successes)+len(failures)} *.prvlog files found.")
+            mention(f"{len(successes)} validated successfully.")
+            print(f"{len(failures)} files failed to validate.")
+            mention('\n'.join(['  '+x for x in failures]))
         else:
-            print(f"{len(successes)+len(failures)} *.prvlog files found and validated.")
+            print(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
         exit()
 
     # All other options refer to a specific PRVFILE, so 
@@ -311,7 +320,7 @@ if __name__ == "__main__":
     prvfile = args['PRVFILE']
     if os.path.isfile(prvfile):
         if verify_prvlog_contents(prvfile):
-            print("Log file content is well-formed.")
+            mention("Log file content is well-formed.")
         else:
             exit(7)
     else:
@@ -323,7 +332,7 @@ if __name__ == "__main__":
         if os.path.isfile(prvfile):
             print(f"Log file '{prvfile}' already exists. Cannot proceed.")
             exit()
-        print(f"Creating new log file in {prvfile}.")
+        mention(f"Creating new log file in {prvfile}.")
         # assemble the header row info
         fingerprint = compute_fingerprint(targfile)
         uri = f"{current_machine}://{os.path.abspath(targfile)}"
@@ -399,7 +408,7 @@ if __name__ == "__main__":
             print(f"Missing file: '{abspath}'")
         elif result == 3:
             print(f"{prvfile} was last updated on a different machine.")
-            print(f"Run prvlog with -u option to update log and explain migration history.")
+            mention(f"Run prvlog with -u option to update log and explain migration history.")
         elif result == 4:
             print(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
         exit(result)
