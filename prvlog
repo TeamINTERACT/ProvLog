@@ -5,6 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
+  prvlog [-v] [-o PRVFILE] -t TARGFILE
   prvlog [-v] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
@@ -12,7 +13,8 @@ Usage:
 Options:
     -h            Display this help information
     -c            Check that PRVFILE is up-to-date and valid
-    -t TARGFILE   Create new PRVFILE sidecar log for target TARGFILE
+    -t TARGFILE   Create new sidecar log for target TARGFILE
+    -o PRVFILE    Output sidecar to PRVILE (default=TARGFILE.prvlog)
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
     -s TARGDIR    Scan a directory and check all *.prvlog files found
@@ -217,9 +219,13 @@ def unpack_log_file(fpath):
         for line in fh.readlines():
             if line.strip():
                 lines.append(line)
-    targetline = lines[0]
-    content = ''.join(lines[1:-1])
-    validationline = lines[-1]
+    targetline = ''
+    content = ''
+    validationline = ''
+    if lines:
+        targetline = lines[0]
+        content = ''.join(lines[1:-1])
+        validationline = lines[-1]
     return (targetline, content, validationline)
 
 
@@ -248,10 +254,13 @@ def check_prvfile_matches_its_target(prvfile):
     2 = target file does not exist
     3 = target file machine name does not match current machine
     4 = fingerprint in prvfile does not match fingerprint of target file
+    5 = problem parsing prvfile
     """
     # read old content
     result = 0
     targetline,content,validationline = unpack_log_file(prvfile)
+    if not targetline or not validationline:
+        return 5,None
 
     # extract fingerprint and target path from targetline
     [expected_fingerprint, targetpath] = targetline.split()
@@ -314,22 +323,32 @@ if __name__ == "__main__":
             mention('\n'.join(['  '+x for x in failures]))
         else:
             print(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
+            if verbose:
+                mention('\n'.join(['  '+x for x in successes]))
         exit(maxresult)
 
     # All other options refer to a specific PRVFILE, so 
     # verify that before proceeding.
     prvfile = args['PRVFILE']
-    if os.path.isfile(prvfile):
-        if verify_prvlog_contents(prvfile):
-            mention("Log file content is well-formed.")
+    if prvfile: 
+        if os.path.isfile(prvfile):
+            if verify_prvlog_contents(prvfile):
+                mention("Log file content is well-formed.")
+            else:
+                exit(7)
         else:
-            exit(7)
-    else:
-        print(f"Log file '{prvfile}' does not exist")
+            print(f"Log file '{prvfile}' does not exist")
 
 
     if args['-t']: # Create prvlog file for new target
         targfile = args['-t']
+        if not prvfile:
+            if args['-o']:
+                prvfile = args['-o']
+                mention(f"Outputting to filename '{prvfile}'")
+            else:
+                prvfile = targfile + '.prvlog'
+                mention(f"Outputting to default filename '{prvfile}'")
         if os.path.isfile(prvfile):
             print(f"Log file '{prvfile}' already exists. Cannot proceed.")
             exit()
