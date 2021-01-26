@@ -5,6 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
+  prvlog (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
 
@@ -14,6 +15,8 @@ Options:
     -t TARGFILE   Create new PRVFILE sidecar log for target TARGFILE
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
+    -s TARGDIR    Scan a directory and check all *.prvlog files found
+    -S TARGDIR    Same as -s, but scans directories recursively
     -V            Print version information
 """
 import os        # for accessing local file system
@@ -219,29 +222,101 @@ def unpack_uri(targetpath):
     return machinename, abspath
     """
     if not ':' in targetpath:
-        print("Malformed target path.")
+        # print("Malformed target path.")
         return None, None
     machine,dum,fileuri = targetpath.partition(':')
     if not fileuri.startswith('///'):
-        print("Malformed target path.")
+        # print("Malformed target path.")
         return None, None
     abspath = fileuri[2:].strip() #remove trailing newline
     return machine,abspath
+
+def check_prvfile_matches_its_target(prvfile):
+    """
+    Given a prvfile path, read it and test whether it is up to
+    date against its target file.
+    Returns an integer result code:
+    0 = success
+    1 = poorly formed target file path
+    2 = target file does not exist
+    3 = target file machine name does not match current machine
+    4 = fingerprint in prvfile does not match fingerprint of target file
+    """
+    # read old content
+    result = 0
+    targetline,content,validationline = unpack_log_file(prvfile)
+
+    # extract fingerprint and target path from targetline
+    [expected_fingerprint, targetpath] = targetline.split()
+
+    # verify machine name
+    machine,abspath = unpack_uri(targetpath)
+    if not machine or not abspath:
+        result = 1
+    elif not os.path.isfile(abspath):
+        result = 2
+    elif machine != current_machine:
+        result = 3
+    elif not verify_target_file(abspath, expected_fingerprint):
+        result = 4
+    return result,targetpath
 
 
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
 
+    current_machine = socket.gethostname()
+
+    # handle the directory scanning args first
+    targdir = ''
+    if args['-s']:
+        targdir = args['-s']
+        recurse = False
+    if args['-S']:
+        targdir = args['-S']
+        recurse = True
+    if targdir:
+        if not os.path.isdir(targdir):
+            print(f"Directory '{targdir}' does not exist.  Aborting.")
+            exit(6)
+        successes = []
+        failures = []
+        for root,dirnames,fnames in os.walk(targdir):
+            for fname in fnames:
+                if not fname.endswith('.prvlog'):
+                    continue
+                absfilepath = os.path.abspath(os.path.join(root,fname))
+                # Now scan the PRVLOG file we've found
+                if os.path.isfile(absfilepath):
+                    # print(f"Checking {absfilepath}")
+                    result,targetpath = check_prvfile_matches_its_target(absfilepath)
+                    if result > 0:
+                        failures.append(absfilepath)
+                    else:
+                        successes.append(absfilepath)
+            if not recurse:
+                break
+
+        if failures:
+            print(f"{len(successes)+len(failures)} *.prvlog files found.")
+            print(f"{len(successes)} validated successfully.")
+            print(f"{len(failures)} files failed to validate:")
+            print('\n'.join(['  '+x for x in failures]))
+        else:
+            print(f"{len(successes)+len(failures)} *.prvlog files found and validated.")
+        exit()
+
+    # All other options refer to a specific PRVFILE, so 
+    # verify that before proceeding.
     prvfile = args['PRVFILE']
     if os.path.isfile(prvfile):
         if verify_prvlog_contents(prvfile):
             print("Log file content is well-formed.")
         else:
-            exit(1)
+            exit(7)
     else:
         print(f"Log file '{prvfile}' does not exist")
 
-    current_machine = socket.gethostname()
 
     if args['-t']: # Create prvlog file for new target
         targfile = args['-t']
@@ -314,24 +389,17 @@ if __name__ == "__main__":
         exit()
 
     if args['-c']:
-        # -c    Check target fingerprint
-        # read old content
-        targetline,content,validationline = unpack_log_file(prvfile)
-        # extract fingerprint and target path from targetline
-        [expected_fingerprint, targetpath] = targetline.split()
-        # verify machine name
-        machine,abspath = unpack_uri(targetpath)
-        if not os.path.isfile(abspath):
-            print(f"  Target file '{abspath}' does not exist.")
-            exit(2)
-        print(f"  Target file exists.")
-        if machine != current_machine:
-            print(f"  Target file {abspath} has moved to host {current_machine} from {machine}")
-            exit(3)
-        print("  Machine names match.")
-        if not verify_target_file(abspath, expected_fingerprint):
-            print(f"  {targetpath} does not match current fingerprint recorded in {prvfile}")
-            exit(4)
-        print("  Fingerprints match.")
-        print(f"{prvfile} is up to date.")
-        exit(0)
+        result,targetpath = check_prvfile_matches_its_target(prvfile)
+        if result == 0:
+            print(f"{prvfile} is up to date.")
+        elif result == 1:
+            print(f"Target path '{targetpath}' is not well-formed.")
+        elif result == 2:
+            print(f"Target file referenced in {prvfile} does not exist.")
+            print(f"Missing file: '{abspath}'")
+        elif result == 3:
+            print(f"{prvfile} was last updated on a different machine.")
+            print(f"Run prvlog with -u option to update log and explain migration history.")
+        elif result == 4:
+            print(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
+        exit(result)
