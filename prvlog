@@ -23,6 +23,7 @@ Options:
     -V            Print version information
 """
 import os        # for accessing local file system
+import sys       # for printing to stderr for errors
 import hashlib   # for generating MD5 hashes
 import socket    # for accessing hostname of current machine
 import datetime  # for adding date stamp to log records 
@@ -127,6 +128,9 @@ def mention(outstr):
     if verbose:
         print(outstr)
 
+def notify(outstr):
+    print(outstr, file=sys.stderr)
+
 def verify_prvlog_contents(filepath):
     """
     Given a filehandle to a prvlog file, parse the contents and verify its fingerprint.
@@ -147,7 +151,7 @@ def verify_prvlog_contents(filepath):
                     print("Log file content not well-formed.  Internal checksums mismatched.")
                     return False
             content += line
-        print("No integrity fingerprint found. File is not valid.")
+        mention(f"No integrity fingerprint found. File '{filepath}' is not valid.")
         return False
 
 
@@ -294,7 +298,7 @@ if __name__ == "__main__":
         recurse = True
     if targdir:
         if not os.path.isdir(targdir):
-            print(f"Directory '{targdir}' does not exist.  Aborting.")
+            notify(f"Directory '{targdir}' does not exist.  Aborting.")
             exit(6)
         maxresult = 0
         successes = []
@@ -319,8 +323,8 @@ if __name__ == "__main__":
         if failures:
             mention(f"{len(successes)+len(failures)} *.prvlog files found.")
             mention(f"{len(successes)} validated successfully.")
-            print(f"{len(failures)} files failed to validate.")
-            mention('\n'.join(['  '+x for x in failures]))
+            notify(f"{len(failures)} files failed to validate.")
+            notify('\n'.join(['  '+x for x in failures]))
         else:
             print(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
             if verbose:
@@ -337,7 +341,7 @@ if __name__ == "__main__":
             else:
                 exit(7)
         else:
-            print(f"Log file '{prvfile}' does not exist")
+            notify(f"Log file '{prvfile}' does not exist")
 
 
     if args['-t']: # Create prvlog file for new target
@@ -350,7 +354,7 @@ if __name__ == "__main__":
                 prvfile = targfile + '.prvlog'
                 mention(f"Outputting to default filename '{prvfile}'")
         if os.path.isfile(prvfile):
-            print(f"Log file '{prvfile}' already exists. Cannot proceed.")
+            notify(f"Log file '{prvfile}' already exists. Cannot proceed.")
             exit()
         mention(f"Creating new log file in {prvfile}.")
         # assemble the header row info
@@ -401,7 +405,7 @@ if __name__ == "__main__":
         if not os.path.isfile(abspath) \
         or machine != current_machine \
         or not verify_target_file(abspath, expected_fingerprint):
-            print("Current fingerprint is not valid. Run with -c to get more information, or with -u to update the fingerprint.")
+            notify("Current fingerprint is not valid. Run with -c to get more information, or with -u to update the fingerprint.")
             exit(5)
 
         # fingerprint is valid, so continue
@@ -422,13 +426,13 @@ if __name__ == "__main__":
         if result == 0:
             print(f"{prvfile} is up to date.")
         elif result == 1:
-            print(f"Target path '{targetpath}' is not well-formed.")
+            notify(f"Target path '{targetpath}' is not well-formed.")
         elif result == 2:
-            print(f"Target file referenced in {prvfile} does not exist.")
-            print(f"Missing file: '{abspath}'")
+            notify(f"Target file referenced in {prvfile} does not exist.")
+            notify(f"Missing file: '{abspath}'")
         elif result == 3:
-            print(f"{prvfile} was last updated on a different machine.")
+            notify(f"{prvfile} was last updated on a different machine.")
             mention(f"Run prvlog with -u option to update log and explain migration history.")
         elif result == 4:
-            print(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
+            notify(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
         exit(result)
