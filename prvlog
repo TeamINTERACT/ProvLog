@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tool for updating and validating ProvenanceLogger (prvlog) files.
+Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
   prvlog -V 
 
 Options:
-    -c TARGFILE   Create PRVFILE log for target TARGFILE
-    -u            Update PRVFILE, adding new MD5 checksum if it has changed
-    -l            Prompt user for a new log MSG for the provenance chain in PRVFILE
-    -f            Validate fingerprint of data file targeted by PRVFILE
+    -c            Check that PRVFILE is up-to-date and valid
+    -t TARGFILE   Create new PRVFILE log for target TARGFILE
+    -u            Update PRVFILE, adding new checksum and log entry if it has changed
+    -l            Prompt user for a new log msg for the provenance chain in PRVFILE
     -V            Print version information
 """
 import os        # for accessing local file system
@@ -36,10 +36,10 @@ prvlog <FILE> -l 'MSG'
     Add a new comment record to FILE.prvlog, with checksum, and
     then recompute closing validation checksum
 
-prvlog <FILE> -c OTHERFILE
+prvlog <FILE> -t OTHERFILE
     Create FILE.prvlog using OTHERFILE as MD5 checksum    
 
-prvlog <FILE> -f
+prvlog <FILE> -c
     Run the script in monitor mode, ending silently if the
     current MD5 matches the expected fingerprint, or reporting a
     problem to STDIO if one occurs.  This mode is used by 
@@ -47,7 +47,7 @@ prvlog <FILE> -f
 
 prvscan [ROOTDIR] [-r]
     Scan ROOTDIR for *.prvlog files.
-    For each FILE.prvlog found, run `prvlog FILE -f` and 
+    For each FILE.prvlog found, run `prvlog FILE -c` and 
     Defaults to current directory, non-recursive.
     relay any reported errors to STDIO.
 
@@ -137,7 +137,7 @@ provenance history before it was first moved into git control on
 this machine.
 
 prv log PRVFILE
-prv log -c CHKSUMFILE PRVFILE
+prv log -t CHKSUMFILE PRVFILE
 prv verify PRVFILE
 """
 
@@ -162,6 +162,7 @@ def verify_prvlog_contents(filepath):
                     return False
             content += line
         print("No integrity fingerprint found. File is not valid.")
+        breakpoint()
         return False
 
 
@@ -195,11 +196,15 @@ def compute_fingerprint(targfile):
     return None
 
 
-def save_prvlog_file(content, prvfile):
+def save_prvlog_file(targetline, oldlogs, newlogs, prvfile):
     """
-    Given some content and a filepath, save the content to the
-    filepath and append a content checksum.
+    Given the content elements and a filepath, save the content to the
+    filepath and append a content checksum. Content elements are
+    expected to be strings, with required markup symbols and carriage
+    returns included.
     """
+    content = '\n'.join([x.strip() for x in [targetline, oldlogs, newlogs] if x])
+    content += '\n'
     computed_fingerprint = hashlib.md5(content.encode('utf-8')).hexdigest()
     with open(prvfile, 'w') as fh:
         fh.write(content)
@@ -216,7 +221,7 @@ def prompt_for_log_entry(prompt=''):
     if not prompt:
         prompt = "Describe changes made to the target file: "
     desc = input(prompt.strip() + ' ')
-    return desc
+    return desc.strip()
 
 
 def unpack_log_file(fpath):
@@ -265,8 +270,8 @@ if __name__ == "__main__":
 
     current_machine = socket.gethostname()
 
-    if args['-c']:
-        targfile = args['-c']
+    if args['-t']: # Create prvlog file for new target
+        targfile = args['-t']
         if os.path.isfile(prvfile):
             print(f"Log file '{prvfile}' already exists. Cannot proceed.")
             exit()
@@ -274,24 +279,23 @@ if __name__ == "__main__":
         # assemble the header row info
         fingerprint = compute_fingerprint(targfile)
         uri = f"{current_machine}://{os.path.abspath(targfile)}"
-        headline = f"{fingerprint}  {uri}\n"
+        targetline = f"{fingerprint}  {uri}"
 
         # assemble the log comment for this first version
         datestr = datetime.date.today().strftime("%Y-%m-%d %H:%M:%D")
         origin = prompt_for_log_entry("Describe origin of the target file: ")
-        logline = f"@ {datestr} {origin}\n"
-        logstamp = f"< {datestr} {headline}\n"
+        logline = f"@ {datestr} {origin}"
+        logstamp = f"< {datestr} {targetline}"
 
         # reassemble the file content
-        content = f"{headline}{logline}{logstamp}"
+        newlog = f"{logline}\n{logstamp}"
 
         # save the updated file
-        save_prvlog_file(content, prvfile)
+        save_prvlog_file(targetline,'',newlog, prvfile)
         print("Log file created.")
         exit()
 
-    if args['-u']:
-        # -u            Update PRVFILE, adding new MD5 checksum if it has changed
+    if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
         # read old content
         # extract headline
         # compute new headline
@@ -304,30 +308,30 @@ if __name__ == "__main__":
     if args['-l']: # Log a new comment to the provenance chain in PRVFILE
         # First verify that the existing fingerprint is valid.
         # read and verify prvlog before altering it
-        headline,content,validationline = unpack_log_file(prvfile)
+        headline,oldlogs,validationline = unpack_log_file(prvfile)
         [expected_fingerprint, targetpath] = headline.split()
         machine,abspath = unpack_uri(targetpath)
         if not os.path.isfile(abspath) \
         or machine != current_machine \
         or not verify_target_file(abspath, expected_fingerprint):
-            print("Current fingerprint is not valid. Run with -f to get more information, or with -u to update the fingerprint.")
+            print("Current fingerprint is not valid. Run with -c to get more information, or with -u to update the fingerprint.")
             exit(5)
 
         # fingerprint is valid, so continue
         # assemble the log comment to be added
         datestr = datetime.date.today().strftime("%Y-%m-%d %H:%M:%D")
         origin = prompt_for_log_entry("Log message to add: ")
-        logline = f"@ {datestr} {origin}\n"
-        logstamp = f"< {datestr} {headline}\n"
+        logline = f"@ {datestr} {origin}"
+        logstamp = f"< {datestr} {headline}"
         # assemble new content
-        content = f"{headline}{content}{logline}{logstamp}"
+        newlog = f"{logline}\n{logstamp}"
         # save the updated file
-        save_prvlog_file(content, prvfile)
+        save_prvlog_file(headline, oldlogs, newlog, prvfile)
         print("Log message added.")
         exit()
 
-    if args['-f']:
-        # -f    Validate target fingerprint
+    if args['-c']:
+        # -c    Check target fingerprint
         # read old content
         headline,content,validationline = unpack_log_file(prvfile)
         # extract fingerprint and target path from headline
