@@ -146,7 +146,6 @@ def verify_prvlog_contents(filepath):
                     return False
             content += line
         print("No integrity fingerprint found. File is not valid.")
-        breakpoint()
         return False
 
 
@@ -288,6 +287,7 @@ if __name__ == "__main__":
         if not os.path.isdir(targdir):
             print(f"Directory '{targdir}' does not exist.  Aborting.")
             exit(6)
+        maxresult = 0
         successes = []
         failures = []
         for root,dirnames,fnames in os.walk(targdir):
@@ -299,6 +299,7 @@ if __name__ == "__main__":
                 if os.path.isfile(absfilepath):
                     # print(f"Checking {absfilepath}")
                     result,targetpath = check_prvfile_matches_its_target(absfilepath)
+                    maxresult = max(result, maxresult)
                     if result > 0:
                         failures.append(absfilepath)
                     else:
@@ -313,7 +314,7 @@ if __name__ == "__main__":
             mention('\n'.join(['  '+x for x in failures]))
         else:
             print(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
-        exit()
+        exit(maxresult)
 
     # All other options refer to a specific PRVFILE, so 
     # verify that before proceeding.
