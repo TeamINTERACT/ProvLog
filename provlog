@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Tool to create and manage sidecar provenance record for some target file.
+
+Usage:
+  prvlog [options] PRVFILE
+  prvlog [-v] [-o PRVFILE] -t TARGFILE
+  prvlog [-v] (-s TARGDIR | -S TARGDIR)
+  prvlog -h 
+  prvlog -V 
+
+Options:
+    -h            Display this help information
+    -c            Check that PRVFILE is up-to-date and valid
+    -t TARGFILE   Create new sidecar log for target TARGFILE
+    -o PRVFILE    Output sidecar to PRVILE (default=TARGFILE.prvlog)
+    -u            Update PRVFILE, adding new checksum and log entry if it has changed
+    -l            Prompt user for a new log msg to add to the record
+    -s TARGDIR    Scan a directory and check all *.prvlog files found
+    -S TARGDIR    Same as -s, but scans directories recursively
+    -v            Display verbose output
+    -V            Print version information
+"""
+import os        # for accessing local file system
+import sys       # for printing to stderr for errors
+import hashlib   # for generating MD5 hashes
+import socket    # for accessing hostname of current machine
+import datetime  # for adding date stamp to log records 
+from docopt import docopt # for processing command line args
+
+"""
+ROADMAP
+    X -r: scan recursively
+    . -M: merge - absorb 2 or more provenance files into a single
+                  one - such as for when 3 files are used to
+                  synthesize a derived table.
+
+    It is up to the operator to add prvscan to a crontab if
+    continuous checking is needed.
+"""
+
+"""
+28431f3f8ae3397d957f04150b1eff91  hostname://path/to/file/VIC_W2_Eth_ToP_5min_20210115.zip
+@ 2021-01-20 11:22:17 Original file creation. 
+< 2021-01-20 11:22:17 28431f3f8ae3397d957f04150b1eff91  hostname://path/to/file/VIC_W2_Eth_ToP_5min_20210115.zip
+^80e0d410f20b970439a2e8133de7781f
+
+Structure of a .PRVLOG file:
+    Top line is always: MD5SUM  FNAME
+        Represents most recent checksum of the subject file
+        This top line was intentionally designed to reflect the
+        common format of checksum files, so that pre-existing 
+        checksums can be grandfathered into the PRV chain. 
+
+        But a runtime warning will be issued by the prv system
+        if that line does not contain a machine name and ://
+        prefix. This is to give the operator a chance to update that
+        entry with more complete information. In practice, however, this
+        information is sometimes not available, so if it is not
+        remediated, the historical information will be transfered as is to the
+        comment section and the new top line will contain proper machine
+        and prefix syntax. (Or possibly record it with the key value UNKNOWN for 
+        machine name.)
+                
+    Followed by any number of comment entries.
+
+    Comment consists of an @ line and a < line.
+
+    @ Is a timestamped comment regarding a provenance/integrity change.
+
+    < Is a timestamped snapshot of the checksum and file path taken from 
+      top line of this file prior to adding this comment.
+
+    Last line of the file is the ^ line, which is just the checksum of all the lines of this file, prior to this line.
+
+    Any operation on this file will fail with a warning message
+    if the ^ line does not match the previous content.
+
+So every distinct variant in the lineage of FILE is documented in
+the PRV file, including its checksum value and its fully
+normalized storage path and name. (Which will help us locate
+backups of that file on those previous machines, if nec.)
+
+In addition, this file also serves as its own checksum record.
+
+PRV Scanning:
+    On a PRV-enabled computer, a service runs on a regular schedule,
+    searching for .prv files and verifying that the active checksum
+    value for its subject file is still valid, and that the
+    self-checksum at the end is also still valid.
+
+    If the subject file checksum is ever found to be incorrect, the
+    operator is notified. 
+
+    If the mismatch is caused by an accidental alteration, the file
+    can be restored and no changes are required to the PRV file. But
+    if the alteration was intentional, then the operator issues
+    another prv change, which updates the PRV file, along with an
+    explanation of the change.
+
+    For data stored in non-atomic form, such as tables in a DB, there
+    is no simple way to run a PRV-scan. Instead, a regularly scheduled 
+    pre-prv script can be run to generate a DB-fingerprint file of the 
+    table, which can then be tracked within the PRV system.
+
+    (Alternatively, the table could be intuited from the path and
+recomputed at verification time, but that would require the PRV
+system to have an extensible scripting system to let it probe
+paths on different DBs and protocols. It's simpler to leave that
+to the operator to set up in an independent cron job.)
+
+
+For files that can be accommodated within git, some of these
+features are redundant. After all, git can tell you when a file
+has been changed. Unfortunately, git does not play nicely with
+enormous datasets, cannot provide much information about the
+nature of a change to binary content, and does not have access to
+provenance history before it was first moved into git control on 
+this machine.
+
+prv log PRVFILE
+prv log -t CHKSUMFILE PRVFILE
+prv verify PRVFILE
+"""
+
+verbose = False
+
+def mention(outstr):
+    global verbose
+    if verbose:
+        print(outstr)
+
+def notify(outstr):
+    print(outstr, file=sys.stderr)
+
+def verify_prvlog_contents(filepath):
+    """
+    Given a filehandle to a prvlog file, parse the contents and verify its fingerprint.
+    Returns True if file is validated.
+    Prints warning and returns False if file is not validated.
+    """
+    with open(filepath, 'r') as fh:
+        content = ''
+        for line in fh.readlines():
+            if line[0] == '^': # is this the validation fingerprint?
+                saved_fingerprint = line[1:].strip()
+                computed_fingerprint = hashlib.md5(content.encode('utf-8')).hexdigest()
+                # print(f"Saved: {saved_fingerprint}")
+                # print(f"Calcd: {computed_fingerprint}")
+                if saved_fingerprint == computed_fingerprint:
+                    return True
+                else:
+                    print("Log file content not well-formed.  Internal checksums mismatched.")
+                    return False
+            content += line
+        mention(f"No integrity fingerprint found. File '{filepath}' is not valid.")
+        return False
+
+
+def verify_target_file(filepath, expected_fingerprint):
+    """
+    Given a filehandle to a target file and a known fingerprint,
+    compute a fingerprint for the content of the target and ensure  
+    that it matches the expected.
+    Returns True if file is validated.
+    Returns False if file is not validated.
+    """
+    calculated_fingerprint = compute_fingerprint(filepath)
+    return calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
+
+def compute_fingerprint(targfile):
+    """
+    Given a path to a file, compute the MD5 checksum of that
+    target, and do so in a manner that is efficient for large
+    files. Returns the hexdigest string of the computed checksum.
+    """
+    blk_size_to_read = 65536
+    filehash = hashlib.md5()
+    with open(targfile, 'rb') as f:
+        while (True):
+            read_data = f.read(blk_size_to_read)
+            if not read_data:
+                break
+            filehash.update(read_data)
+        fing = filehash.hexdigest()
+        return fing
+    return None
+
+
+def save_prvlog_file(targetline, oldlogs, newlogs, prvfile):
+    """
+    Given the content elements and a filepath, save the content to the
+    filepath and append a content checksum. Content elements are
+    expected to be strings, with required markup symbols and carriage
+    returns included.
+    """
+    content = '\n'.join([x.strip() for x in [targetline, oldlogs, newlogs] if x])
+    content += '\n'
+    computed_fingerprint = hashlib.md5(content.encode('utf-8')).hexdigest()
+    with open(prvfile, 'w') as fh:
+        fh.write(content)
+        fh.write(f"^{computed_fingerprint}\n")
+
+
+def prompt_for_log_entry(prompt=''):
+    """
+    Ask the user to provide a string describing the current
+    version of the target file.  
+    Returns the provided string in the form of a PRVFILE comment
+    entry.
+    """
+    if not prompt:
+        prompt = "Describe changes made to the target file: "
+    desc = input(prompt.strip() + ' ')
+    return desc.strip()
+
+
+def unpack_log_file(fpath):
+    """
+    Given a path to a prvlog file, unpack it and return
+    targetline, comments, validationline
+    """
+    lines = []
+    with open(fpath, 'r') as fh:
+        for line in fh.readlines():
+            if line.strip():
+                lines.append(line)
+    targetline = ''
+    content = ''
+    validationline = ''
+    if lines:
+        targetline = lines[0]
+        content = ''.join(lines[1:-1])
+        validationline = lines[-1]
+    return (targetline, content, validationline)
+
+
+def unpack_uri(targetpath):
+    """
+    Given a uri of the form machine://path, split it up and
+    return machinename, abspath
+    """
+    if not ':' in targetpath:
+        mention("Malformed target path.")
+        return None, None
+    machine,dum,fileuri = targetpath.partition(':')
+    if not fileuri.startswith('///'):
+        mention("Malformed target path.")
+        return None, None
+    abspath = fileuri[2:].strip() #remove trailing newline
+    return machine,abspath
+
+def check_prvfile_matches_its_target(prvfile):
+    """
+    Given a prvfile path, read it and test whether it is up to
+    date against its target file.
+    Returns an integer result code:
+    0 = success
+    1 = poorly formed target file path
+    2 = target file does not exist
+    3 = target file machine name does not match current machine
+    4 = fingerprint in prvfile does not match fingerprint of target file
+    5 = problem parsing prvfile
+    """
+    # read old content
+    result = 0
+    targetline,content,validationline = unpack_log_file(prvfile)
+    if not targetline or not validationline:
+        return 5,None
+
+    # extract fingerprint and target path from targetline
+    [expected_fingerprint, targetpath] = targetline.split()
+
+    # verify machine name
+    machine,abspath = unpack_uri(targetpath)
+    if not machine or not abspath:
+        result = 1
+    elif not os.path.isfile(abspath):
+        result = 2
+    elif machine != current_machine:
+        result = 3
+    elif not verify_target_file(abspath, expected_fingerprint):
+        result = 4
+    return result,targetpath
+
+
+if __name__ == "__main__":
+    args = docopt(__doc__, version='0.1.1')
+    verbose = args['-v']
+
+    current_machine = socket.gethostname()
+
+    # handle the directory scanning args first
+    targdir = ''
+    if args['-s']:
+        targdir = args['-s']
+        recurse = False
+    if args['-S']:
+        targdir = args['-S']
+        recurse = True
+    if targdir:
+        if not os.path.isdir(targdir):
+            notify(f"Directory '{targdir}' does not exist.  Aborting.")
+            exit(6)
+        maxresult = 0
+        successes = []
+        failures = []
+        for root,dirnames,fnames in os.walk(targdir):
+            for fname in fnames:
+                if not fname.endswith('.prvlog'):
+                    continue
+                absfilepath = os.path.abspath(os.path.join(root,fname))
+                # Now scan the PRVLOG file we've found
+                if os.path.isfile(absfilepath):
+                    # print(f"Checking {absfilepath}")
+                    result,targetpath = check_prvfile_matches_its_target(absfilepath)
+                    maxresult = max(result, maxresult)
+                    if result > 0:
+                        failures.append(absfilepath)
+                    else:
+                        successes.append(absfilepath)
+            if not recurse:
+                break
+
+        if failures:
+            mention(f"{len(successes)+len(failures)} *.prvlog files found.")
+            mention(f"{len(successes)} validated successfully.")
+            notify(f"{len(failures)} files failed to validate.")
+            notify('\n'.join(['  '+x for x in failures]))
+        else:
+            print(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
+            if verbose:
+                mention('\n'.join(['  '+x for x in successes]))
+        exit(maxresult)
+
+    # All other options refer to a specific PRVFILE, so 
+    # verify that before proceeding.
+    prvfile = args['PRVFILE']
+    if prvfile: 
+        if os.path.isfile(prvfile):
+            if verify_prvlog_contents(prvfile):
+                mention("Log file content is well-formed.")
+            else:
+                exit(7)
+        else:
+            notify(f"Log file '{prvfile}' does not exist")
+
+
+    if args['-t']: # Create prvlog file for new target
+        targfile = args['-t']
+        if not prvfile:
+            if args['-o']:
+                prvfile = args['-o']
+                mention(f"Outputting to filename '{prvfile}'")
+            else:
+                prvfile = targfile + '.prvlog'
+                mention(f"Outputting to default filename '{prvfile}'")
+        if os.path.isfile(prvfile):
+            notify(f"Log file '{prvfile}' already exists. Cannot proceed.")
+            exit()
+        mention(f"Creating new log file in {prvfile}.")
+        # assemble the header row info
+        fingerprint = compute_fingerprint(targfile)
+        uri = f"{current_machine}://{os.path.abspath(targfile)}"
+        targetline = f"{fingerprint}  {uri}"
+
+        # assemble the log comment for this first version
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        origin = prompt_for_log_entry("Describe origin of the target file: ")
+        logline = f"@ {datestr} {origin}"
+        logstamp = f"< {datestr} {targetline}"
+
+        # reassemble the file content
+        newlog = f"{logline}\n{logstamp}"
+
+        # save the updated file
+        save_prvlog_file(targetline,'',newlog, prvfile)
+        print("Log file created.")
+        exit()
+
+    if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
+        # read old content
+        targetline,oldlogs,validationline = unpack_log_file(prvfile)
+        machine,targfile = unpack_uri(targetline.split()[1])
+        # compute new targetline
+        fingerprint = compute_fingerprint(targfile)
+        uri = f"{current_machine}://{os.path.abspath(targfile)}"
+        targetline = f"{fingerprint}  {uri}"
+        # query user for new comment
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        origin = prompt_for_log_entry("Log message to add: ")
+        logline = f"@ {datestr} {origin}"
+        logstamp = f"< {datestr} {targetline}"
+        # assemble new content
+        newlog = f"{logline}\n{logstamp}"
+        # write new version of file
+        save_prvlog_file(targetline,oldlogs,newlog, prvfile)
+        print("Log file updated.")
+        exit()
+
+    if args['-l']: # Log a new comment to the provenance chain in PRVFILE
+        # First verify that the existing fingerprint is valid.
+        # read and verify prvlog before altering it
+        targetline,oldlogs,validationline = unpack_log_file(prvfile)
+        [expected_fingerprint, targetpath] = targetline.split()
+        machine,abspath = unpack_uri(targetpath)
+        if not os.path.isfile(abspath) \
+        or machine != current_machine \
+        or not verify_target_file(abspath, expected_fingerprint):
+            notify("Current fingerprint is not valid. Run with -c to get more information, or with -u to update the fingerprint.")
+            exit(5)
+
+        # fingerprint is valid, so continue
+        # assemble the log comment to be added
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        origin = prompt_for_log_entry("Log message to add: ")
+        logline = f"@ {datestr} {origin}"
+        logstamp = f"< {datestr} {targetline}"
+        # assemble new content
+        newlog = f"{logline}\n{logstamp}"
+        # save the updated file
+        save_prvlog_file(targetline, oldlogs, newlog, prvfile)
+        print("Log message added.")
+        exit()
+
+    if args['-c']:
+        result,targetpath = check_prvfile_matches_its_target(prvfile)
+        if result == 0:
+            print(f"{prvfile} is up to date.")
+        elif result == 1:
+            notify(f"Target path '{targetpath}' is not well-formed.")
+        elif result == 2:
+            notify(f"Target file referenced in {prvfile} does not exist.")
+            notify(f"Missing file: '{abspath}'")
+        elif result == 3:
+            notify(f"{prvfile} was last updated on a different machine.")
+            mention(f"Run prvlog with -u option to update log and explain migration history.")
+        elif result == 4:
+            notify(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
+        exit(result)
