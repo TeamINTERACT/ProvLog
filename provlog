@@ -6,12 +6,14 @@ Tool to create and manage sidecar provenance record for some target file.
 Usage:
   prvlog [options] PRVFILE
   prvlog [-v] [-o PRVFILE] -t TARGFILE
-  prvlog [-v] (-s TARGDIR | -S TARGDIR)
+  prvlog [-v] [-H] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
 
 Options:
     -h            Display this help information
+    -H            Ignore hostnames when verifying fingerprints
+    -d            Display debugging info
     -c            Check that PRVFILE is up-to-date and valid
     -t TARGFILE   Create new sidecar log for target TARGFILE
     -o PRVFILE    Output sidecar to PRVILE (default=TARGFILE.prvlog)
@@ -125,10 +127,16 @@ prv verify PRVFILE
 """
 
 verbose = False
+trace = False
+
+def debug(outstr):
+    global trace
+    if trace:
+        print(outstr)
 
 def mention(outstr):
-    global verbose
-    if verbose:
+    global verbose, trace
+    if verbose or trace:
         print(outstr)
 
 def notify(outstr):
@@ -146,15 +154,15 @@ def verify_prvlog_contents(filepath):
             if line[0] == '^': # is this the validation fingerprint?
                 saved_fingerprint = line[1:].strip()
                 computed_fingerprint = hashlib.md5(content.encode('utf-8')).hexdigest()
-                # print(f"Saved: {saved_fingerprint}")
-                # print(f"Calcd: {computed_fingerprint}")
+                debug(f"Saved: {saved_fingerprint}")
+                debug(f"Calcd: {computed_fingerprint}")
                 if saved_fingerprint == computed_fingerprint:
                     return True
                 else:
-                    print("Log file content not well-formed.  Internal checksums mismatched.")
+                    notify("Log file content not well-formed.  Internal checksums mismatched.")
                     return False
             content += line
-        mention(f"No integrity fingerprint found. File '{filepath}' is not valid.")
+        debug(f"No integrity fingerprint found. File '{filepath}' is not valid.")
         return False
 
 
@@ -167,7 +175,9 @@ def verify_target_file(filepath, expected_fingerprint):
     Returns False if file is not validated.
     """
     calculated_fingerprint = compute_fingerprint(filepath)
-    return calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
+    foo = calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
+    debug(f"Verification is {foo} because {calculated_fingerprint} vs {expected_fingerprint}")
+    return foo
 
 def compute_fingerprint(targfile):
     """
@@ -233,6 +243,7 @@ def unpack_log_file(fpath):
         targetline = lines[0]
         content = ''.join(lines[1:-1])
         validationline = lines[-1]
+    mention(f"Verifying against fingerprint {validationline.strip()}")
     return (targetline, content, validationline)
 
 
@@ -251,7 +262,7 @@ def unpack_uri(targetpath):
     abspath = fileuri[2:].strip() #remove trailing newline
     return machine,abspath
 
-def check_prvfile_matches_its_target(prvfile):
+def check_prvfile_matches_its_target(prvfile, compare_hostnames=True):
     """
     Given a prvfile path, read it and test whether it is up to
     date against its target file.
@@ -267,6 +278,7 @@ def check_prvfile_matches_its_target(prvfile):
     result = 0
     targetline,content,validationline = unpack_log_file(prvfile)
     if not targetline or not validationline:
+        notify("File missing required elements.")
         return 5,None
 
     # extract fingerprint and target path from targetline
@@ -275,12 +287,16 @@ def check_prvfile_matches_its_target(prvfile):
     # verify machine name
     machine,abspath = unpack_uri(targetpath)
     if not machine or not abspath:
+        notify("Bad machine or path")
         result = 1
     elif not os.path.isfile(abspath):
+        notify(f"Target path '{abspath}' doesn't exist")
         result = 2
-    elif machine != current_machine:
+    elif compare_hostnames and (machine != current_machine):
+        notify("Wrong machine")
         result = 3
     elif not verify_target_file(abspath, expected_fingerprint):
+        notify("Fingerprint mismatch")
         result = 4
     return result,targetpath
 
@@ -288,6 +304,11 @@ def check_prvfile_matches_its_target(prvfile):
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
     verbose = args['-v']
+    trace = args['-d']
+    compare_hostnames = True
+
+    # grab the hostname comparison flag
+    compare_hostnames = not args['-H']
 
     current_machine = socket.gethostname()
 
@@ -313,13 +334,15 @@ if __name__ == "__main__":
                 absfilepath = os.path.abspath(os.path.join(root,fname))
                 # Now scan the PRVLOG file we've found
                 if os.path.isfile(absfilepath):
-                    # print(f"Checking {absfilepath}")
-                    result,targetpath = check_prvfile_matches_its_target(absfilepath)
+                    mention(f"Checking {absfilepath}")
+                    result,targetpath = check_prvfile_matches_its_target(absfilepath, compare_hostnames)
                     maxresult = max(result, maxresult)
                     if result > 0:
                         failures.append(absfilepath)
                     else:
                         successes.append(absfilepath)
+                else:
+                    notify(f"Can't find {absfilepath}")
             if not recurse:
                 break
 
@@ -329,10 +352,11 @@ if __name__ == "__main__":
             notify(f"{len(failures)} files failed to validate.")
             notify('\n'.join(['  '+x for x in failures]))
         else:
-            print(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
+            notify(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
             if verbose:
                 mention('\n'.join(['  '+x for x in successes]))
         exit(maxresult)
+
 
     # All other options refer to a specific PRVFILE, so 
     # verify that before proceeding.
@@ -376,7 +400,7 @@ if __name__ == "__main__":
 
         # save the updated file
         save_prvlog_file(targetline,'',newlog, prvfile)
-        print("Log file created.")
+        notify("Log file created.")
         exit()
 
     if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
@@ -396,7 +420,7 @@ if __name__ == "__main__":
         newlog = f"{logline}\n{logstamp}"
         # write new version of file
         save_prvlog_file(targetline,oldlogs,newlog, prvfile)
-        print("Log file updated.")
+        notify("Log file updated.")
         exit()
 
     if args['-l']: # Log a new comment to the provenance chain in PRVFILE
@@ -421,13 +445,13 @@ if __name__ == "__main__":
         newlog = f"{logline}\n{logstamp}"
         # save the updated file
         save_prvlog_file(targetline, oldlogs, newlog, prvfile)
-        print("Log message added.")
+        notify("Log message added.")
         exit()
 
     if args['-c']:
-        result,targetpath = check_prvfile_matches_its_target(prvfile)
+        result,targetpath = check_prvfile_matches_its_target(prvfile, compare_hostnames)
         if result == 0:
-            print(f"{prvfile} is up to date.")
+            notify(f"{prvfile} is up to date.")
         elif result == 1:
             notify(f"Target path '{targetpath}' is not well-formed.")
         elif result == 2:
