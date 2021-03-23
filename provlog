@@ -6,18 +6,20 @@ Tool to create and manage sidecar provenance record for some target file.
 Usage:
   prvlog [options] PRVFILE
   prvlog [-v] [-o PRVFILE] [-x CHECKSUM] -t TARGFILE
-  prvlog [-v] [-H] (-s TARGDIR | -S TARGDIR)
+  prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
 
 Options:
     -h            Display this help information
     -H            Ignore hostnames when verifying fingerprints
+    -a            Test all provlog files found (default = only stale files)
     -d            Display debugging info
     -c            Check that PRVFILE is up-to-date and valid
     -t TARGFILE   Create new sidecar log for target TARGFILE
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
-    -o PRVFILE    Output sidecar to PRVILE (default=TARGFILE.prvlog)
+    -o PRVFILE    Output sidecar to PRVFILE (default=TARGFILE.prvlog)
+    -r            Report only. Don't run actual MD5 tests.
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
     -s TARGDIR    Scan a directory and check all *.prvlog files found
@@ -31,17 +33,6 @@ import hashlib   # for generating MD5 hashes
 import socket    # for accessing hostname of current machine
 import datetime  # for adding date stamp to log records 
 from docopt import docopt # for processing command line args
-
-"""
-ROADMAP
-    X -r: scan recursively
-    . -M: merge - absorb 2 or more provenance files into a single
-                  one - such as for when 3 files are used to
-                  synthesize a derived table.
-
-    It is up to the operator to add prvscan to a crontab if
-    continuous checking is needed.
-"""
 
 """
 28431f3f8ae3397d957f04150b1eff91  hostname://path/to/file/VIC_W2_Eth_ToP_5min_20210115.zip
@@ -263,10 +254,18 @@ def unpack_uri(targetpath):
     abspath = fileuri[2:].strip() #remove trailing newline
     return machine,abspath
 
-def check_prvfile_matches_its_target(prvfile, compare_hostnames=True):
+def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fresh=True):
     """
     Given a prvfile path, read it and test whether it is up to
     date against its target file.
+    By default, all files are tested, but if check_fresh is
+
+    False, only test sidecar file if it is older than its target
+    file. This allows us to skip the expensive checksum against
+    really big files if nothing has changed since the sidecar was
+    created/updated. For files being skipped, success is returned
+    without doing the test.
+
     Returns an integer result code:
     0 = success
     1 = poorly formed target file path
@@ -279,7 +278,7 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True):
     result = 0
     targetline,content,validationline = unpack_log_file(prvfile)
     if not targetline or not validationline:
-        notify("File missing required elements.")
+        notify("FAILURE: File missing required elements.")
         return 5,None
 
     # extract fingerprint and target path from targetline
@@ -288,17 +287,19 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True):
     # verify machine name
     machine,abspath = unpack_uri(targetpath)
     if not machine or not abspath:
-        notify("Bad machine or path")
+        notify("FAILURE: Bad machine or path")
         result = 1
     elif not os.path.isfile(abspath):
-        notify(f"Target path '{abspath}' doesn't exist")
+        notify(f"FAILURE: Target path '{abspath}' doesn't exist")
         result = 2
     elif compare_hostnames and (machine != current_machine):
-        notify("Wrong machine")
+        notify("FAILURE: Wrong machine")
         result = 3
     elif not verify_target_file(abspath, expected_fingerprint):
-        notify("Fingerprint mismatch")
+        notify("FAILURE: Fingerprint mismatch")
         result = 4
+    else:
+        mention("SUCCESS")
     return result,targetpath
 
 
@@ -310,6 +311,12 @@ if __name__ == "__main__":
 
     # grab the hostname comparison flag
     compare_hostnames = not args['-H']
+
+    # grab the flag for testing/ignoring stale files
+    skip_fresh = not args['-a']
+
+    # grab the flag for simulating/suppressing the actual tests
+    report_only = args['-r']
 
     current_machine = socket.gethostname()
 
@@ -326,6 +333,9 @@ if __name__ == "__main__":
             notify(f"Directory '{targdir}' does not exist.  Aborting.")
             exit(6)
         maxresult = 0
+        numconsidered = 0
+        numfresh = 0
+        staleskipped = 0
         successes = []
         failures = []
         for root,dirnames,fnames in os.walk(targdir):
@@ -333,27 +343,52 @@ if __name__ == "__main__":
                 if not fname.endswith('.prvlog'):
                     continue
                 absfilepath = os.path.abspath(os.path.join(root,fname))
-                # Now scan the PRVLOG file we've found
+                # Now examine the PRVLOG file we've found
                 if os.path.isfile(absfilepath):
                     mention(f"Checking {absfilepath}")
-                    result,targetpath = check_prvfile_matches_its_target(absfilepath, compare_hostnames)
-                    maxresult = max(result, maxresult)
-                    if result > 0:
-                        failures.append(absfilepath)
+                    numconsidered += 1
+                    # first, test whether we should be skipping this file
+                    if skip_fresh:
+                        targetline,content,validationline = unpack_log_file(absfilepath)
+                        machine,targfile = unpack_uri(targetline.split()[1])
+                        sidecar_timestamp = os.path.getmtime(absfilepath)
+                        target_timestamp = os.path.getmtime(targfile)
+                        if target_timestamp < sidecar_timestamp:
+                            numfresh += 1
+                            # sidecar is newer than target so it's fresh. 
+                            # Skip it.
+                            continue
+                    # now actually test it
+                    if report_only: #unless we're suppressing the actual tests
+                        staleskipped += 1
                     else:
-                        successes.append(absfilepath)
+                        result,targetpath = check_prvfile_matches_its_target(absfilepath, compare_hostnames)
+                        maxresult = max(result, maxresult)
+                        if result > 0:
+                            failures.append(absfilepath)
+                        else:
+                            successes.append(absfilepath)
                 else:
                     notify(f"Can't find {absfilepath}")
             if not recurse:
                 break
-
-        if failures:
-            mention(f"{len(successes)+len(failures)} *.prvlog files found.")
-            mention(f"{len(successes)} validated successfully.")
-            notify(f"{len(failures)} files failed to validate.")
+    
+        notify(f"{numconsidered} *.prvlog files found")
+        if report_only:
+            notify(f"{numfresh} were up-to-date")
+            notify(f"{staleskipped} would have been tested but skipped by -r flag")
+        elif failures:
+            # mention(f"{len(successes)+len(failures)} *.prvlog files found.")
+            # mention(f"{len(successes)} validated successfully.")
+            # notify(f"{len(failures)} files failed to validate.")
+            notify(f"{len(successes)+len(failures)} required testing")
+            notify(f"{len(successes)} succeeded")
+            notify(f"{len(failures)} failed")
             notify('\n'.join(['  '+x for x in failures]))
         else:
-            notify(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
+            # notify(f"{len(successes)+len(failures)} prvlog file(s) found and validated.")
+            notify(f"{len(successes)+len(failures)} required testing")
+            notify(f"{len(successes)} succeeded")
             if verbose:
                 mention('\n'.join(['  '+x for x in successes]))
         exit(maxresult)
