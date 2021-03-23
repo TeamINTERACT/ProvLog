@@ -5,7 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog [-v] [-o PRVFILE] [-x CHECKSUM] -t TARGFILE
+  prvlog [-v] [-o PRVFILE] [-x CHECKSUM] [-l] [-m MSG] -t TARGFILE
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
@@ -18,6 +18,7 @@ Options:
     -c            Check that PRVFILE is up-to-date and valid
     -t TARGFILE   Create new sidecar log for target TARGFILE
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
+    -m "LOG STR"  Use "LOG STR" for log entry instead of prompting for interactive input. 
     -o PRVFILE    Output sidecar to PRVFILE (default=TARGFILE.prvlog)
     -r            Report only. Don't run actual MD5 tests.
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
@@ -318,6 +319,9 @@ if __name__ == "__main__":
     # grab the flag for simulating/suppressing the actual tests
     report_only = args['-r']
 
+    # grab the log msg if it was provided
+    origin = args['-m']
+
     current_machine = socket.gethostname()
 
     # handle the directory scanning args first
@@ -430,7 +434,8 @@ if __name__ == "__main__":
 
         # assemble the log comment for this first version
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        origin = prompt_for_log_entry("Describe origin of the target file: ")
+        if not origin:
+            origin = prompt_for_log_entry("Describe origin of the target file: ")
 
         # reassemble the file content
         newlog = f"@ {datestr} {origin}\n< {datestr} {newtargetline}"
@@ -451,7 +456,7 @@ if __name__ == "__main__":
             save_prvlog_file(newtargetline, origlog, newlog, prvfile)
         else:
             # save the updated file
-            save_prvlog_file(targetline, '', newlog, prvfile)
+            save_prvlog_file(newtargetline, '', newlog, prvfile)
 
         notify("Log file created.")
         exit()
@@ -466,7 +471,8 @@ if __name__ == "__main__":
         targetline = f"{fingerprint}  {uri}"
         # query user for new comment
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        origin = prompt_for_log_entry("Log message to add: ")
+        if not origin:
+            origin = prompt_for_log_entry("Log message to add: ")
         logline = f"@ {datestr} {origin}"
         logstamp = f"< {datestr} {targetline}"
         # assemble new content
@@ -491,7 +497,8 @@ if __name__ == "__main__":
         # fingerprint is valid, so continue
         # assemble the log comment to be added
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        origin = prompt_for_log_entry("Log message to add: ")
+        if not origin:
+            origin = prompt_for_log_entry("Log message to add: ")
         logline = f"@ {datestr} {origin}"
         logstamp = f"< {datestr} {targetline}"
         # assemble new content
