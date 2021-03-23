@@ -5,7 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog [-v] [-o PRVFILE] -t TARGFILE
+  prvlog [-v] [-o PRVFILE] [-x CHECKSUM] -t TARGFILE
   prvlog [-v] [-H] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
@@ -16,6 +16,7 @@ Options:
     -d            Display debugging info
     -c            Check that PRVFILE is up-to-date and valid
     -t TARGFILE   Create new sidecar log for target TARGFILE
+    -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
     -o PRVFILE    Output sidecar to PRVILE (default=TARGFILE.prvlog)
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
@@ -372,6 +373,9 @@ if __name__ == "__main__":
 
 
     if args['-t']: # Create prvlog file for new target
+        prevmd5 = None
+        if args['-x']:
+            prevmd5 = args['-x'].strip()
         targfile = args['-t']
         if not prvfile:
             if args['-o']:
@@ -387,19 +391,33 @@ if __name__ == "__main__":
         # assemble the header row info
         fingerprint = compute_fingerprint(targfile)
         uri = f"{current_machine}://{os.path.abspath(targfile)}"
-        targetline = f"{fingerprint}  {uri}"
+        newtargetline = f"{fingerprint}  {uri}"
 
         # assemble the log comment for this first version
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         origin = prompt_for_log_entry("Describe origin of the target file: ")
-        logline = f"@ {datestr} {origin}"
-        logstamp = f"< {datestr} {targetline}"
 
         # reassemble the file content
-        newlog = f"{logline}\n{logstamp}"
+        newlog = f"@ {datestr} {origin}\n< {datestr} {newtargetline}"
 
-        # save the updated file
-        save_prvlog_file(targetline,'',newlog, prvfile)
+        # if an existing md5 was provided and no longer matches
+        # then the origin information belongs in old log data and
+        # the explanation for the change becomes the newer log data
+        if prevmd5 and prevmd5 != fingerprint:
+            reason = prompt_for_log_entry("Target no longer matches provided MD5 checksum.\nDescribe change that has taken place: ")
+            prevdate = prompt_for_log_entry("When was previous checksum created? [YYYY-MM-DD HH:MM:SS] ")
+            prevtargetline = f"{prevmd5}  {uri}"
+            # In this case, the origin statement should be
+            # attached to the OLD checksum, and this new
+            # explanation should be the current, active
+            # comment, so shuffle the records
+            origlog = f"@ {prevdate} {origin}\n< {prevdate} {prevtargetline}"
+            newlog = f"@ {datestr} {reason}\n< {datestr} {newtargetline}"
+            save_prvlog_file(newtargetline, origlog, newlog, prvfile)
+        else:
+            # save the updated file
+            save_prvlog_file(targetline, '', newlog, prvfile)
+
         notify("Log file created.")
         exit()
 
