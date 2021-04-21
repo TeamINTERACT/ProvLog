@@ -5,7 +5,8 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog [-v] [-o PRVFILE] [-x CHECKSUM] [-l] [-m MSG] -t TARGFILE
+  prvlog [-v] -c PRVFILE
+  prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
@@ -19,7 +20,7 @@ Options:
     -t TARGFILE   Create new sidecar log for target TARGFILE
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
     -m "LOG STR"  Use "LOG STR" for log entry instead of prompting for interactive input. 
-    -o PRVFILE    Output sidecar to PRVFILE (default=TARGFILE.prvlog)
+    -o PRVFILE    Output sidecar to PRVFILE
     -r            Report only. Don't run actual MD5 tests.
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
@@ -27,12 +28,17 @@ Options:
     -S TARGDIR    Same as -s, but scans directories recursively
     -v            Display verbose output
     -V            Print version information
+
+TARGFILE:
+    FILE:machinename:///path/to/file/on/that/machine
+    POSTGRESQL:machinename:schema.tablename
 """
 import os        # for accessing local file system
 import sys       # for printing to stderr for errors
 import hashlib   # for generating MD5 hashes
 import socket    # for accessing hostname of current machine
 import datetime  # for adding date stamp to log records 
+import subprocess as sp # for running shell processes
 from docopt import docopt # for processing command line args
 
 """
@@ -167,12 +173,29 @@ def verify_target_file(filepath, expected_fingerprint):
     Returns True if file is validated.
     Returns False if file is not validated.
     """
-    calculated_fingerprint = compute_fingerprint(filepath)
+    mention(f"Verifying fingerprint for path {filepath} is {expected_fingerprint}")
+    uri, calculated_fingerprint = fingerprint_local_file(filepath)
     foo = calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
-    debug(f"Verification is {foo} because {calculated_fingerprint} vs {expected_fingerprint}")
+    mention(f"Verification is {foo} because {calculated_fingerprint} vs {expected_fingerprint}")
     return foo
 
-def compute_fingerprint(targfile):
+
+def verify_target_pgtable(tablepath, expected_fingerprint):
+    """
+    Given a schema.table path to a target table and a known fingerprint,
+    compute a fingerprint for the content of the table and ensure  
+    that it matches the expected.
+    Returns True if table is validated.
+    Returns False if table is not validated.
+    """
+    mention(f"Verifying fingerprint for path {tablepath} is {expected_fingerprint}")
+    uri, calculated_fingerprint = fingerprint_postgresql_table(tablepath)
+    foo = calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
+    mention(f"Verification is {foo} because {calculated_fingerprint} vs {expected_fingerprint}")
+    return foo
+
+
+def fingerprint_local_file(targfile):
     """
     Given a path to a file, compute the MD5 checksum of that
     target, and do so in a manner that is efficient for large
@@ -187,9 +210,34 @@ def compute_fingerprint(targfile):
                 break
             filehash.update(read_data)
         fing = filehash.hexdigest()
-        return fing
-    return None
+        current_machine = socket.gethostname()
+        absuri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
+        return absuri, fing
+    return None, None
 
+
+def fingerprint_postgresql_table(uri):
+    """
+    Given a URI to a postgres database table, connect to the 
+    table and compute a fingerprint for the current contents.
+    Note that PG does not support a table-wide MD5 mechanism, 
+    so we compute something manually. In short, we convert each
+    row into a text string, which is then checksummed. We then
+    convert that checksum into a bigint and sum the bigints for
+    all the rows of the table. This produces a reasonably
+    non-colliding fingerprint that will be consistent for 
+    a table, regardless of what order PG elects to process the 
+    rows in.
+    """
+    [dbname,tablepath] = uri.split(':')
+    sql = f"SELECT SUM(('x'||SUBSTR(MD5(f::TEXT),1,16))::BIT(64)::BIGINT) FROM {tablepath} AS f;"
+    mention(f"SQL: {sql}")
+    cmd = ['psql', dbname, '-c', sql]
+    mention(f"CMD: {cmd}")
+    result = sp.run(cmd, stdout=sp.PIPE, encoding='utf-8')
+    lines = result.stdout.split('\n')
+    fing = lines[2].strip()
+    return f"POSTGRESQL:{uri}", fing
 
 def save_prvlog_file(targetline, oldlogs, newlogs, prvfile):
     """
@@ -242,25 +290,38 @@ def unpack_log_file(fpath):
 
 def unpack_uri(targetpath):
     """
-    Given a uri of the form machine://path, split it up and
+    Given a uri of the form MODE:machine://path, split it up and
     return machinename, abspath
+    For backward compatibility, if the first element is not in
+    block caps, treat it as the machine name and assume the mode
+    is an implicit FILE.
     """
     if not ':' in targetpath:
-        mention("Malformed target path.")
-        return None, None
-    machine,dum,fileuri = targetpath.partition(':')
-    if not fileuri.startswith('///'):
-        mention("Malformed target path.")
-        return None, None
-    abspath = fileuri[2:].strip() #remove trailing newline
-    return machine,abspath
+        mention(f"Malformed target path: {targetpath}")
+        return None, None, None
+    mode,dum,remainder = targetpath.partition(':')
+    if all([c != c.lower() for c in mode]): #mode is block caps
+        machine,dum,fileuri = remainder.partition(':')
+    else:
+        mode = "FILE"
+        machine = mode
+        fileuri = remainder
+    mention(f"Parsed URI {targetpath} into {mode}, {machine}, and {fileuri}")
+    if mode == "FILE": 
+        if not fileuri.startswith('///'):
+            mention(f"Malformed file URI, slashless: {fileuri}")
+            return None, None, None
+        abspath = fileuri[2:].strip() #remove trailing newline
+    elif mode == "POSTGRESQL":
+        abspath = fileuri.strip() #remove trailing newline
+    return mode,machine,abspath
+
 
 def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fresh=True):
     """
     Given a prvfile path, read it and test whether it is up to
     date against its target file.
     By default, all files are tested, but if check_fresh is
-
     False, only test sidecar file if it is older than its target
     file. This allows us to skip the expensive checksum against
     really big files if nothing has changed since the sidecar was
@@ -286,23 +347,38 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fres
     [expected_fingerprint, targetpath] = targetline.split()
 
     # verify machine name
-    machine,abspath = unpack_uri(targetpath)
-    if not machine or not abspath:
-        notify("FAILURE: Bad machine or path")
-        result = 1
-    elif not os.path.isfile(abspath):
-        notify(f"FAILURE: Target path '{abspath}' doesn't exist")
-        result = 2
-    elif compare_hostnames and (machine != current_machine):
-        notify("FAILURE: Wrong machine")
-        result = 3
-    elif not verify_target_file(abspath, expected_fingerprint):
-        notify("FAILURE: Fingerprint mismatch")
-        result = 4
+    mode,machine,abspath = unpack_uri(targetpath)
+    if mode == "FILE":
+        if not machine or not abspath:
+            notify("FAILURE: Bad machine or path")
+            result = 1
+        elif not os.path.isfile(abspath):
+            notify(f"FAILURE: Target path '{abspath}' doesn't exist")
+            result = 2
+        elif compare_hostnames and (machine != current_machine):
+            notify("FAILURE: Wrong machine")
+            result = 3
+        elif not verify_target_file(abspath, expected_fingerprint):
+            notify("FAILURE: Fingerprint mismatch")
+            result = 4
+        else:
+            mention("SUCCESS")
+    elif mode == "POSTGRESQL":
+        mention(f"VERIFYING PG URI: {mode} - {machine} - {abspath}")
+        tablepath = machine + ':' + abspath
+        if not verify_target_pgtable(tablepath, expected_fingerprint):
+            notify("FAILURE: Fingerprint mismatch")
+            result = 4
     else:
-        mention("SUCCESS")
+        notify(f"Unrecognized URI mode {mode}")
     return result,targetpath
 
+
+# target files stored on different platforms are fingerprinted in
+# different ways, because not all storage systems have a
+# consistent way to extract a checksum.
+fingerprinters = {'FILE': fingerprint_local_file, 
+                  'POSTGRESQL': fingerprint_postgresql_table,}
 
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
@@ -420,17 +496,30 @@ if __name__ == "__main__":
             if args['-o']:
                 prvfile = args['-o']
                 mention(f"Outputting to filename '{prvfile}'")
-            else:
-                prvfile = targfile + '.prvlog'
-                mention(f"Outputting to default filename '{prvfile}'")
         if os.path.isfile(prvfile):
             notify(f"Log file '{prvfile}' already exists. Cannot proceed.")
             exit()
         mention(f"Creating new log file in {prvfile}.")
+
+        # determine what kind of target is being fingerprinted
+        if ':' in targfile:
+            targtype,colon,targpath = targfile.partition(':')
+            if not targtype in fingerprinters:
+                print(f"Don't know how to fingerprint files of type {targtype}")
+                exit()
+        else: 
+            print("No target type specified. Use format: FILE:filepath or POSTGRESQL:schema.tablename")
+            exit()
+
+        #prvfile = targpath + ".prvlog" # the version without the FILE: or POSTGRES: prefix
+
         # assemble the header row info
-        fingerprint = compute_fingerprint(targfile)
-        uri = f"{current_machine}://{os.path.abspath(targfile)}"
-        newtargetline = f"{fingerprint}  {uri}"
+        fingerprinter = fingerprinters[targtype]
+        absuri,fingerprint = fingerprinter(targpath)
+        print(f"Absolute URI of target: {absuri}")
+        print(f"Targfile {targfile} of type {targtype} at path {targpath} has fingerprint {fingerprint}")
+
+        newtargetline = f"{fingerprint}  {absuri}"
 
         # assemble the log comment for this first version
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -458,16 +547,20 @@ if __name__ == "__main__":
             # save the updated file
             save_prvlog_file(newtargetline, '', newlog, prvfile)
 
-        notify("Log file created.")
+        notify(f"Log file {prvfile} created.")
         exit()
 
     if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
         # read old content
         targetline,oldlogs,validationline = unpack_log_file(prvfile)
-        machine,targfile = unpack_uri(targetline.split()[1])
+        mode, machine,targfile = unpack_uri(targetline.split()[1])
         # compute new targetline
-        fingerprint = compute_fingerprint(targfile)
-        uri = f"{current_machine}://{os.path.abspath(targfile)}"
+        if mode == 'FILE':
+            absuri, fingerprint = fingerprint_local_file(targfile)
+            uri = f"{current_machine}://{os.path.abspath(targfile)}"
+        elif mode == 'POSTGRESQL':
+            absuri, fingerprint = fingerprint_postgresql_table(targfile)
+            uri = f"POSTGRESQL:{machine}://{targfile}"
         targetline = f"{fingerprint}  {uri}"
         # query user for new comment
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
