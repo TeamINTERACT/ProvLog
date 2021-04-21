@@ -5,7 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog [-v] -c PRVFILE
+  prvlog [-v] (-c|-u) PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
@@ -229,6 +229,7 @@ def fingerprint_postgresql_table(uri):
     a table, regardless of what order PG elects to process the 
     rows in.
     """
+    mention(f"Parsing uri {uri}")
     [dbname,tablepath] = uri.split(':')
     sql = f"SELECT SUM(('x'||SUBSTR(MD5(f::TEXT),1,16))::BIT(64)::BIGINT) FROM {tablepath} AS f;"
     mention(f"SQL: {sql}")
@@ -552,6 +553,10 @@ if __name__ == "__main__":
 
     if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
         # read old content
+        result,targetpath = check_prvfile_matches_its_target(prvfile, compare_hostnames)
+        if result == 0:
+            notify(f"Fingerprint still matches. No need to update.")
+            exit()
         targetline,oldlogs,validationline = unpack_log_file(prvfile)
         mode, machine,targfile = unpack_uri(targetline.split()[1])
         # compute new targetline
@@ -559,8 +564,8 @@ if __name__ == "__main__":
             absuri, fingerprint = fingerprint_local_file(targfile)
             uri = f"{current_machine}://{os.path.abspath(targfile)}"
         elif mode == 'POSTGRESQL':
-            absuri, fingerprint = fingerprint_postgresql_table(targfile)
-            uri = f"POSTGRESQL:{machine}://{targfile}"
+            absuri, fingerprint = fingerprint_postgresql_table(machine + ':' + targfile)
+            uri = f"POSTGRESQL:{machine}:{targfile}"
         targetline = f"{fingerprint}  {uri}"
         # query user for new comment
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
