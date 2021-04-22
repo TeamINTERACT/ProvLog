@@ -5,7 +5,7 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog [-v] (-c|-u) PRVFILE
+  prvlog [-v] [-H] (-c|-u) PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
@@ -13,7 +13,7 @@ Usage:
 
 Options:
     -h            Display this help information
-    -H            Ignore hostnames when verifying fingerprints
+    -H            Check hostnames when verifying fingerprints
     -a            Test all provlog files found (default = only stale files)
     -d            Display debugging info
     -c            Check that PRVFILE is up-to-date and valid
@@ -357,7 +357,7 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fres
             notify(f"FAILURE: Target path '{abspath}' doesn't exist")
             result = 2
         elif compare_hostnames and (machine != current_machine):
-            notify("FAILURE: Wrong machine")
+            notify(f"FAILURE: Wrong machine ({machine} vs {current_machine})")
             result = 3
         elif not verify_target_file(abspath, expected_fingerprint):
             notify("FAILURE: Fingerprint mismatch")
@@ -388,7 +388,7 @@ if __name__ == "__main__":
     compare_hostnames = True
 
     # grab the hostname comparison flag
-    compare_hostnames = not args['-H']
+    compare_hostnames = args['-H']
 
     # grab the flag for testing/ignoring stale files
     skip_fresh = not args['-a']
@@ -562,7 +562,7 @@ if __name__ == "__main__":
         # compute new targetline
         if mode == 'FILE':
             absuri, fingerprint = fingerprint_local_file(targfile)
-            uri = f"{current_machine}://{os.path.abspath(targfile)}"
+            uri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
         elif mode == 'POSTGRESQL':
             absuri, fingerprint = fingerprint_postgresql_table(machine + ':' + targfile)
             uri = f"POSTGRESQL:{machine}:{targfile}"
@@ -616,7 +616,7 @@ if __name__ == "__main__":
             notify(f"Target file referenced in {prvfile} does not exist.")
             notify(f"Missing file: '{abspath}'")
         elif result == 3:
-            notify(f"{prvfile} was last updated on a different machine.")
+            notify(f"This is {current_machine} but {prvfile} was last updated on a different machine.")
             mention(f"Run prvlog with -u option to update log and explain migration history.")
         elif result == 4:
             notify(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
