@@ -431,7 +431,12 @@ if __name__ == "__main__":
                     # first, test whether we should be skipping this file
                     if skip_fresh:
                         targetline,content,validationline = unpack_log_file(absfilepath)
-                        machine,targfile = unpack_uri(targetline.split()[1])
+                        mode,machine,targfile = unpack_uri(targetline.split()[1])
+                        if mode == "POSTGRESQL":
+                            numfresh += 1
+                            # target is a DB table, which has no
+                            # date to compare, so skip it.
+                            continue
                         sidecar_timestamp = os.path.getmtime(absfilepath)
                         target_timestamp = os.path.getmtime(targfile)
                         if target_timestamp < sidecar_timestamp:
@@ -614,7 +619,7 @@ if __name__ == "__main__":
             notify(f"Target path '{targetpath}' is not well-formed.")
         elif result == 2:
             notify(f"Target file referenced in {prvfile} does not exist.")
-            notify(f"Missing file: '{abspath}'")
+            notify(f"Missing file: '{os.path.abspath(targetpath)}'")
         elif result == 3:
             notify(f"This is {current_machine} but {prvfile} was last updated on a different machine.")
             mention(f"Run prvlog with -u option to update log and explain migration history.")
