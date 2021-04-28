@@ -273,11 +273,26 @@ def unpack_log_file(fpath):
     Given a path to a prvlog file, unpack it and return
     targetline, comments, validationline
     """
+    print("Unpacking log file.")
     lines = []
     with open(fpath, 'r') as fh:
         for line in fh.readlines():
             if line.strip():
                 lines.append(line)
+
+    # verify that content conforms at least somewhat to expected format
+    # content should be non-empty
+    if not lines.strip():
+        print("No content.")
+        return None, None, None
+    # content will have at least one line 
+    # beginning with each of @, <, and ^
+    firstchars = set([line[0] for line in lines])
+    print(f"First chars: {firstchars}")
+    if not all(x in firstchars for x in '@^<'):
+        print("Some firstchars missing.")
+        return None, None, None
+
     targetline = ''
     content = ''
     validationline = ''
@@ -488,6 +503,7 @@ if __name__ == "__main__":
             if verify_prvlog_contents(prvfile):
                 mention("Log file content is well-formed.")
             else:
+                notify(f"Log file {os.path.abspath(prvfile)} is not well-formed.")
                 exit(7)
         else:
             notify(f"Log file '{prvfile}' does not exist")
@@ -612,6 +628,7 @@ if __name__ == "__main__":
         exit()
 
     if args['-c']:
+        print("Processing -c")
         result,targetpath = check_prvfile_matches_its_target(prvfile, compare_hostnames)
         if result == 0:
             notify(f"{prvfile} is up to date.")
