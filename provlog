@@ -8,7 +8,7 @@ Usage:
   prvlog [-v] [-H] (-c|-u) PRVFILE
   prvlog [-v] [-H] -M=TARGURI PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
-  prvlog [-v] -m MSG -T TARGDIR
+  prvlog [-v] [-r] -m MSG -T TARGDIR
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
@@ -25,7 +25,7 @@ Options:
     -m "LOG STR"  Use "LOG STR" for log entry instead of prompting for interactive input. 
     -M TARGURI    Target file referenced in PRVFILE has been moved to TARGURI. Implies -u.
     -o PRVFILE    Output sidecar to PRVFILE
-    -r            Report only. Don't run actual MD5 tests.
+    -r            Report what would happen only. Don't perform actual operation.
     -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
     -s TARGDIR    Scan a directory and check all *.prvlog files found
@@ -410,23 +410,29 @@ def assemble_target_line(targeturi):
     return(f"{fingerprint}  {uri}")
 
 
-def create_log_for_target_file(targfilepath, logmsg):
+def create_log_for_target_file(targfilepath, logmsg, report_only=True):
     """
     Given an absolute target file path and a log message, create a new .prvlog
-    file for the target, using logmsg as the initial comment.
+    file for the target, using logmsg as the initial comment. If
+    report_only, then do not actually create the file.
 
     Returns 0 on success.
     Returns 1 if target file does not exist or is not readable.
     Returns 2 if prvlog already exists.
     """
     if not os.path.isfile(targfilepath):
+        notify(f"{targfilepath} is not a valid file. Skipping.")
         return 1
 
     prvfilepath = targfilepath + ".prvlog"
     if os.path.isfile(prvfilepath):
+        notify(f"{prvfilepath} already exists. Skipping {targfilepath}.")
         return 2
 
-    notify(f"Creating new log file for {targfilepath} in {prvfilepath}.")
+    notify(f"Creating new log file: {prvfilepath}")
+
+    if report_only:
+        return 0
 
     # assemble the header row info
     fingerprinter = fingerprinters['FILE']
@@ -452,7 +458,7 @@ fingerprinters = {'FILE': fingerprint_local_file,
 
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
-    print(args)
+    # print(args)
     verbose = args['-v']
     trace = args['-d']
     compare_hostnames = True
@@ -590,9 +596,9 @@ if __name__ == "__main__":
                 if fname.endswith('.prvlog'): #don't log the log files
                     continue
                 abstargpath = os.path.abspath(os.path.join(root,fname))
-                notify(f"{root} with {fname} joins to {abstargpath}")
+                mention(f"{root} with {fname} joins to {abstargpath}")
                 if os.path.isfile(abstargpath):
-                    create_log_for_target_file(abstargpath, logmsg)
+                    create_log_for_target_file(abstargpath, logmsg, report_only)
 
 
     if args['-t']: # Create prvlog file for new target
