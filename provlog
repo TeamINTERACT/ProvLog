@@ -8,6 +8,7 @@ Usage:
   prvlog [-v] [-H] (-c|-u) PRVFILE
   prvlog [-v] [-H] -M=TARGURI PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
+  prvlog [-v] -m MSG -T TARGDIR
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
   prvlog -V 
@@ -19,6 +20,7 @@ Options:
     -d            Display debugging info
     -c            Check that PRVFILE is up-to-date and valid
     -t TARGFILE   Create new sidecar log for target TARGFILE
+    -T TARGDIR    Traverse hierarchy below TARGDIR and create new sidecar for every file found
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
     -m "LOG STR"  Use "LOG STR" for log entry instead of prompting for interactive input. 
     -M TARGURI    Target file referenced in PRVFILE has been moved to TARGURI. Implies -u.
@@ -407,6 +409,41 @@ def assemble_target_line(targeturi):
         uri = f"POSTGRESQL:{machine}:{targfile}"
     return(f"{fingerprint}  {uri}")
 
+
+def create_log_for_target_file(targfilepath, logmsg):
+    """
+    Given an absolute target file path and a log message, create a new .prvlog
+    file for the target, using logmsg as the initial comment.
+
+    Returns 0 on success.
+    Returns 1 if target file does not exist or is not readable.
+    Returns 2 if prvlog already exists.
+    """
+    if not os.path.isfile(targfilepath):
+        return 1
+
+    prvfilepath = targfilepath + ".prvlog"
+    if os.path.isfile(prvfilepath):
+        return 2
+
+    notify(f"Creating new log file for {targfilepath} in {prvfilepath}.")
+
+    # assemble the header row info
+    fingerprinter = fingerprinters['FILE']
+    absuri,fingerprint = fingerprinter(targfilepath)
+
+    newtargetline = f"{fingerprint}  {absuri}"
+
+    # assemble the log comment for this first version
+    datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # assemble the log file content
+    newlog = f"@ {datestr} {logmsg}\n< {datestr} {newtargetline}"
+
+    # save the updated file
+    save_prvlog_file(newtargetline, '', newlog, prvfilepath)
+
+      
 # target files stored on different platforms are fingerprinted in
 # different ways, because not all storage systems have a
 # consistent way to extract a checksum.
@@ -415,6 +452,7 @@ fingerprinters = {'FILE': fingerprint_local_file,
 
 if __name__ == "__main__":
     args = docopt(__doc__, version='0.1.1')
+    print(args)
     verbose = args['-v']
     trace = args['-d']
     compare_hostnames = True
@@ -524,6 +562,37 @@ if __name__ == "__main__":
                 exit(7)
         else:
             notify(f"Log file '{prvfile}' does not exist")
+
+    if args['-T']:
+        targdir = args['-T']
+        if not targdir:
+            notify("No target directory provided. Aborting.")
+            exit(6)
+
+        if not os.path.isdir(targdir):
+            notify(f"Directory '{targdir}' does not exist.  Aborting.")
+            exit(6)
+
+        if not args['-m']:
+            notify(f"-T option requires -m, but none found.  Aborting.")
+            exit(9)
+        else:
+            logmsg = args['-m']
+
+        maxresult = 0
+        numconsidered = 0
+        numfresh = 0
+        staleskipped = 0
+        successes = []
+        failures = []
+        for root,dirnames,fnames in os.walk(targdir):
+            for fname in fnames:
+                if fname.endswith('.prvlog'): #don't log the log files
+                    continue
+                abstargpath = os.path.abspath(os.path.join(root,fname))
+                notify(f"{root} with {fname} joins to {abstargpath}")
+                if os.path.isfile(abstargpath):
+                    create_log_for_target_file(abstargpath, logmsg)
 
 
     if args['-t']: # Create prvlog file for new target
