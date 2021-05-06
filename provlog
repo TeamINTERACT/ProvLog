@@ -192,7 +192,7 @@ def verify_target_dir(dirpath, expected_fingerprint):
     Returns True if file is validated.
     Returns False if file is not validated.
     """
-    mention(f"Verifying fingerprint for path {dirpath} is {expected_fingerprint}")
+    mention(f"Verifying that fingerprint for path {dirpath} == {expected_fingerprint}")
     uri, calculated_fingerprint = fingerprint_local_dir(dirpath)
     foo = calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
     mention(f"Verification is {foo} because {calculated_fingerprint} vs {expected_fingerprint}")
@@ -245,7 +245,13 @@ def fingerprint_local_dir(targetpath):
     if not os.path.isdir(targetpath):
         return None, None
 
-    listing = '\n'.join(sorted(os.listdir(targetpath)))
+    # fingerprint of a directory is a fingerpint on the sorted
+    # list of files within that dir, but excludes all prvlog
+    # files. (Because we're only concerned with monitoring
+    # changes to the payload in the dir, not the other monitoring
+    # files.)
+    filelist = [x for x in os.listdir(targetpath) if not x.endswith('.prvlog')]
+    listing = '\n'.join(sorted(filelist))
 
     dirhash = hashlib.md5()
     dirhash.update(listing.encode())
@@ -432,7 +438,7 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fres
             notify(f"FAILURE: Wrong machine ({machine} vs {current_machine})")
             result = 3
         elif not verify_target_dir(abspath, expected_fingerprint):
-            notify("FAILURE: Fingerprint mismatch")
+            notify(f"FAILURE: Fingerprint mismatch for {abspath}")
             result = 4
         else:
             mention("SUCCESS")
@@ -508,6 +514,46 @@ def create_log_for_target_file(targfilepath, logmsg, report_only=True):
     # save the updated file
     save_prvlog_file(newtargetline, '', newlog, prvfilepath)
 
+
+def create_log_for_target_dir(targdirpath, logmsg, report_only=True):
+    """
+    Given an absolute path to a dir and a log message, create a new .prvlog
+    file for the target dir, using logmsg as the initial comment. If
+    report_only, then do not actually create the file.
+
+    Returns 0 on success.
+    Returns 1 if target dir does not exist or is not readable.
+    Returns 2 if prvlog already exists.
+    """
+    if not os.path.isdir(targdirpath):
+        notify(f"{targdirpath} is not a valid dir. Skipping.")
+        return 1
+
+    prvdirpath = targdirpath + ".prvlog"
+    if os.path.isdir(prvdirpath):
+        notify(f"{prvdirpath} already exists. Skipping {targdirpath}.")
+        return 2
+
+    notify(f"Creating new log file: {prvdirpath}")
+
+    if report_only:
+        return 0
+
+    # assemble the header row info
+    fingerprinter = fingerprinters['DIR']
+    absuri,fingerprint = fingerprinter(targdirpath)
+
+    newtargetline = f"{fingerprint}  {absuri}"
+
+    # assemble the log comment for this first version
+    datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # assemble the log file content
+    newlog = f"@ {datestr} {logmsg}\n< {datestr} {newtargetline}"
+
+    # save the updated file
+    save_prvlog_file(newtargetline, '', newlog, prvdirpath)
+
       
 # target files stored on different platforms are fingerprinted in
 # different ways, because not all storage systems have a
@@ -572,6 +618,10 @@ if __name__ == "__main__":
                             numfresh += 1
                             # target is a DB table, which has no
                             # date to compare, so skip it.
+                            continue
+                        if not os.path.exists(targfile):
+                            numfresh += 1
+                            failures.append(absfilepath)
                             continue
                         sidecar_timestamp = os.path.getmtime(absfilepath)
                         target_timestamp = os.path.getmtime(targfile)
@@ -659,6 +709,11 @@ if __name__ == "__main__":
                 mention(f"{root} with {fname} joins to {abstargpath}")
                 if os.path.isfile(abstargpath):
                     create_log_for_target_file(abstargpath, logmsg, report_only)
+            for dirname in dirnames:
+                abstargpath = os.path.abspath(os.path.join(root,dirname))
+                mention(f"{root} with {fname} joins to {abstargpath}")
+                if os.path.isdir(abstargpath):
+                    create_log_for_target_dir(abstargpath, logmsg, report_only)
 
 
     if args['-t']: # Create prvlog file for new target
