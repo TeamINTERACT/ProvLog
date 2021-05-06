@@ -184,6 +184,21 @@ def verify_target_file(filepath, expected_fingerprint):
     return foo
 
 
+def verify_target_dir(dirpath, expected_fingerprint):
+    """
+    Given a path to a target dir and a known fingerprint,
+    compute a fingerprint for the content of the target and ensure  
+    that it matches the expected.
+    Returns True if file is validated.
+    Returns False if file is not validated.
+    """
+    mention(f"Verifying fingerprint for path {dirpath} is {expected_fingerprint}")
+    uri, calculated_fingerprint = fingerprint_local_dir(dirpath)
+    foo = calculated_fingerprint and (calculated_fingerprint == expected_fingerprint)
+    mention(f"Verification is {foo} because {calculated_fingerprint} vs {expected_fingerprint}")
+    return foo
+
+
 def verify_target_pgtable(tablepath, expected_fingerprint):
     """
     Given a schema.table path to a target table and a known fingerprint,
@@ -218,6 +233,26 @@ def fingerprint_local_file(targfile):
         absuri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
         return absuri, fing
     return None, None
+
+
+def fingerprint_local_dir(targetpath):
+    """
+    Given a path to a directory, compute the MD5 checksum of the
+    file and directory names in that folder, in sorted order,
+    without recursing into subfolders. 
+    Returns the hexdigest string of the computed checksum.
+    """
+    if not os.path.isdir(targetpath):
+        return None, None
+
+    listing = '\n'.join(sorted(os.listdir(targetpath)))
+
+    dirhash = hashlib.md5()
+    dirhash.update(listing.encode())
+    fing = dirhash.hexdigest()
+    current_machine = socket.gethostname()
+    absuri = f"DIR:{current_machine}://{os.path.abspath(targetpath)}"
+    return absuri, fing
 
 
 def fingerprint_postgresql_table(uri):
@@ -330,6 +365,11 @@ def unpack_uri(targetpath):
             mention(f"Malformed file URI, slashless: {fileuri}")
             return None, None, None
         abspath = fileuri[2:].strip() #remove trailing newline
+    elif mode == "DIR": 
+        if not fileuri.startswith('///'):
+            mention(f"Malformed directory URI, slashless: {fileuri}")
+            return None, None, None
+        abspath = fileuri[2:].strip() #remove trailing newline
     elif mode == "POSTGRESQL":
         abspath = fileuri.strip() #remove trailing newline
     return mode,machine,abspath
@@ -371,12 +411,27 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fres
             notify("FAILURE: Bad machine or path")
             result = 1
         elif not os.path.isfile(abspath):
-            notify(f"FAILURE: Target path '{abspath}' doesn't exist")
+            notify(f"FAILURE: Target path '{abspath}' doesn't exist or is not a file")
             result = 2
         elif compare_hostnames and (machine != current_machine):
             notify(f"FAILURE: Wrong machine ({machine} vs {current_machine})")
             result = 3
         elif not verify_target_file(abspath, expected_fingerprint):
+            notify("FAILURE: Fingerprint mismatch")
+            result = 4
+        else:
+            mention("SUCCESS")
+    elif mode == "DIR":
+        if not machine or not abspath:
+            notify("FAILURE: Bad machine or path")
+            result = 1
+        elif not os.path.isdir(abspath):
+            notify(f"FAILURE: Target path '{abspath}' doesn't exist or is not a directory")
+            result = 2
+        elif compare_hostnames and (machine != current_machine):
+            notify(f"FAILURE: Wrong machine ({machine} vs {current_machine})")
+            result = 3
+        elif not verify_target_dir(abspath, expected_fingerprint):
             notify("FAILURE: Fingerprint mismatch")
             result = 4
         else:
@@ -391,6 +446,7 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fres
         notify(f"Unrecognized URI mode {mode}")
     return result,targetpath
 
+
 def assemble_target_line(targeturi):
     """
     Given a target expressed in URI form, create the
@@ -404,6 +460,9 @@ def assemble_target_line(targeturi):
     elif mode == 'FILE':
         absuri, fingerprint = fingerprint_local_file(targfile)
         uri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
+    elif mode == 'DIR':
+        absuri, fingerprint = fingerprint_local_dir(targfile)
+        uri = f"DIR:{current_machine}://{os.path.abspath(targfile)}"
     elif mode == 'POSTGRESQL':
         absuri, fingerprint = fingerprint_postgresql_table(machine + ':' + targfile)
         uri = f"POSTGRESQL:{machine}:{targfile}"
@@ -454,6 +513,7 @@ def create_log_for_target_file(targfilepath, logmsg, report_only=True):
 # different ways, because not all storage systems have a
 # consistent way to extract a checksum.
 fingerprinters = {'FILE': fingerprint_local_file, 
+                  'DIR': fingerprint_local_dir,
                   'POSTGRESQL': fingerprint_postgresql_table,}
 
 if __name__ == "__main__":
@@ -689,6 +749,9 @@ if __name__ == "__main__":
         # compute new targetline
         if mode == 'FILE':
             absuri, fingerprint = fingerprint_local_file(targfile)
+            uri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
+        elif mode == 'DIR':
+            absuri, fingerprint = fingerprint_local_dir(targfile)
             uri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
         elif mode == 'POSTGRESQL':
             absuri, fingerprint = fingerprint_postgresql_table(machine + ':' + targfile)
