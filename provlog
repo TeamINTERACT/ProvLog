@@ -5,7 +5,8 @@ Tool to create and manage sidecar provenance record for some target file.
 
 Usage:
   prvlog [options] PRVFILE
-  prvlog [-v] [-H] (-c|-u) PRVFILE
+  prvlog [-v] [-H] [-m MSG] update PRVFILE
+  prvlog [-v] [-H] [-m MSG] check PRVFILE
   prvlog [-v] [-H] -M=TARGURI PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-r] -m MSG -T TARGDIR
@@ -18,15 +19,13 @@ Options:
     -H            Check hostnames when verifying fingerprints
     -a            Test all provlog files found (default = only stale files)
     -d            Display debugging info
-    -c            Check that PRVFILE is up-to-date and valid
     -t TARGFILE   Create new sidecar log for target TARGFILE
     -T TARGDIR    Traverse hierarchy below TARGDIR and create new sidecar for every file found
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
-    -m "LOG STR"  Use "LOG STR" for log entry instead of prompting for interactive input. 
-    -M TARGURI    Target file referenced in PRVFILE has been moved to TARGURI. Implies -u.
+    -m MSG        Use MSG for log entry instead of prompting for interactive input. 
+    -M TARGURI    Target file referenced in PRVFILE has been moved to TARGURI. Implies update.
     -o PRVFILE    Output sidecar to PRVFILE
     -r            Report what would happen only. Don't perform actual operation.
-    -u            Update PRVFILE, adding new checksum and log entry if it has changed
     -l            Prompt user for a new log msg to add to the record
     -s TARGDIR    Scan a directory and check all *.prvlog files found
     -S TARGDIR    Same as -s, but scans directories recursively
@@ -491,7 +490,7 @@ def create_log_for_target_file(targfilepath, logmsg, report_only=True):
 
     prvfilepath = targfilepath + ".prvlog"
     if os.path.isfile(prvfilepath):
-        notify(f"{prvfilepath} already exists. Skipping {targfilepath}.")
+        notify(f"{prvfilepath} already exists. Skipping.")
         return 2
 
     notify(f"Creating new log file: {prvfilepath}")
@@ -531,7 +530,7 @@ def create_log_for_target_dir(targdirpath, logmsg, report_only=True):
 
     prvdirpath = targdirpath + ".prvlog"
     if os.path.isdir(prvdirpath):
-        notify(f"{prvdirpath} already exists. Skipping {targdirpath}.")
+        notify(f"{prvdirpath} already exists. Skipping.")
         return 2
 
     notify(f"Creating new log file: {prvdirpath}")
@@ -711,7 +710,7 @@ if __name__ == "__main__":
                     create_log_for_target_file(abstargpath, logmsg, report_only)
             for dirname in dirnames:
                 abstargpath = os.path.abspath(os.path.join(root,dirname))
-                mention(f"{root} with {fname} joins to {abstargpath}")
+                mention(f"{root} with {dirname} joins to {abstargpath}")
                 if os.path.isdir(abstargpath):
                     create_log_for_target_dir(abstargpath, logmsg, report_only)
 
@@ -793,7 +792,7 @@ if __name__ == "__main__":
         newlog = f"{logline}\n{logstamp}"
         save_prvlog_file(newtargetline, oldlogs, newlog, prvfile)
 
-    if args['-u']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
+    if args['update']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
         # read old content
         result,targetpath = check_prvfile_matches_its_target(prvfile, compare_hostnames)
         if result == 0:
@@ -834,7 +833,7 @@ if __name__ == "__main__":
         if not os.path.isfile(abspath) \
         or machine != current_machine \
         or not verify_target_file(abspath, expected_fingerprint):
-            notify("Current fingerprint is not valid. Run with -c to get more information, or with -u to update the fingerprint.")
+            notify("Current fingerprint is not valid. Run with 'check' to get more information, or with 'update' to update the fingerprint.")
             exit(5)
 
         # fingerprint is valid, so continue
@@ -851,7 +850,7 @@ if __name__ == "__main__":
         notify("Log message added.")
         exit()
 
-    if args['-c']:
+    if args['check']:
         result,targetpath = check_prvfile_matches_its_target(prvfile, compare_hostnames)
         if result == 0:
             notify(f"{prvfile} is up to date.")
@@ -862,7 +861,7 @@ if __name__ == "__main__":
             notify(f"Missing file: '{os.path.abspath(targetpath)}'")
         elif result == 3:
             notify(f"This is {current_machine} but {prvfile} was last updated on a different machine.")
-            mention(f"Run prvlog with -u option to update log and explain migration history.")
+            mention(f"Run prvlog with 'update' to update log and explain migration history.")
         elif result == 4:
             notify(f"Target file '{targetpath}' does not match current fingerprint recorded in {prvfile}")
         exit(result)
