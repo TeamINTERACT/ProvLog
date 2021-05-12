@@ -33,7 +33,7 @@ Options:
 
 Commands:
     check PRV    Check the PRV file to verify its integrity
-    moveto URI     Target file referenced in PRVFILE has been moved to URI. Implies update.
+    moveto URI   Target file referenced in PRVFILE has been moved to URI. Implies update.
     update PRV   Add a record to the log in PRV to explain a change to the target file
 
 
@@ -457,7 +457,7 @@ def check_prvfile_matches_its_target(prvfile, compare_hostnames=True, check_fres
             result = 4
     else:
         notify(f"Unrecognized URI mode {mode}")
-    return result,targetpath
+    return result,targetpath.strip()
 
 
 def assemble_target_line(targeturi):
