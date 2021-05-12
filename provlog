@@ -7,7 +7,7 @@ Usage:
   prvlog [options] PRVFILE
   prvlog [-v] [-H] [-m MSG] update PRVFILE
   prvlog [-v] [-H] [-m MSG] check PRVFILE
-  prvlog [-v] [-H] -M=TARGURI PRVFILE
+  prvlog [-v] [-H] [-m MSG] moveto TARGURI PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-r] -m MSG -T TARGDIR
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
@@ -23,7 +23,6 @@ Options:
     -T TARGDIR    Traverse hierarchy below TARGDIR and create new sidecar for every file found
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
     -m MSG        Use MSG for log entry instead of prompting for interactive input. 
-    -M TARGURI    Target file referenced in PRVFILE has been moved to TARGURI. Implies update.
     -o PRVFILE    Output sidecar to PRVFILE
     -r            Report what would happen only. Don't perform actual operation.
     -l            Prompt user for a new log msg to add to the record
@@ -32,9 +31,17 @@ Options:
     -v            Display verbose output
     -V            Print version information
 
+Commands:
+    check PRV    Check the PRV file to verify its integrity
+    moveto URI     Target file referenced in PRVFILE has been moved to URI. Implies update.
+    update PRV   Add a record to the log in PRV to explain a change to the target file
+
+
+
 TARGFILE:
     FILE:machinename:///path/to/file/on/that/machine
     POSTGRESQL:machinename:schema.tablename
+    DIR://path/to/directory
 """
 import os        # for accessing local file system
 import sys       # for printing to stderr for errors
@@ -347,7 +354,7 @@ def unpack_log_file(fpath):
 
 def unpack_uri(targetpath):
     """
-    Given a uri of the form MODE:machine://path, split it up and
+    Given a uri of the form MODE:machine:///path, split it up and
     return machinename, abspath
     For backward compatibility, if the first element is not in
     block caps, treat it as the machine name and assume the mode
@@ -358,13 +365,14 @@ def unpack_uri(targetpath):
         mention(f"Malformed target path: {targetpath}")
         return None, None, None
     mode,dum,remainder = targetpath.partition(':')
+    debug(f"URI mode = {mode}")
     if all([c != c.lower() for c in mode]): #mode is block caps
         machine,dum,fileuri = remainder.partition(':')
     else:
         mode = "FILE"
         machine = mode
         fileuri = remainder
-    mention(f"Parsed URI {targetpath} into {mode}, {machine}, and {fileuri}")
+    mention(f"Parsed URI {targetpath} into\n  {mode}\n {machine}\n  {fileuri}")
     if mode == "FILE": 
         if not fileuri.startswith('///'):
             mention(f"Malformed file URI, slashless: {fileuri}")
@@ -779,13 +787,18 @@ if __name__ == "__main__":
         exit()
 
 
-    if args['-M']: # target file has been moved, so update the prvfile's target line
+    if args['moveto']: # target file has been moved, so update the prvfile's target line
         oldtargetline,oldlogs,oldvalidationline = unpack_log_file(prvfile)
-        newtargeturi = args['-M']
+        oldmode,oldmachine,oldtargfile = unpack_uri(oldtargetline.split()[1])
+        newtargeturi = args['TARGURI']
+        newmode,newmachine,newtargfile = unpack_uri(newtargeturi)
+        if not oldmode == newmode:
+            notify(f"Don't know how to change mode from {oldmode} to {newmode}.  Aborting.")
+            exit()
         newtargetline = assemble_target_line(newtargeturi)
         # now auto-create a log entry to record the path change
         datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        msg = "Target file moved to new location"
+        msg = "Target moved to new URI"
         logline = f"@ {datestr} {msg}"
         logstamp = f"< {datestr} {newtargetline}"
         # assemble new content
