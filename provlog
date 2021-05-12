@@ -7,6 +7,7 @@ Usage:
   prvlog [options] PRVFILE
   prvlog [-v] [-H] [-m MSG] update PRVFILE
   prvlog [-v] [-H] [-m MSG] check PRVFILE
+  prvlog [-v] [-H] [-m MSG] repair PRVFILE
   prvlog [-v] [-H] [-m MSG] moveto TARGURI PRVFILE
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-r] -m MSG -T TARGDIR
@@ -35,6 +36,7 @@ Commands:
     check PRV    Check the PRV file to verify its integrity
     moveto URI   Target file referenced in PRVFILE has been moved to URI. Implies update.
     update PRV   Add a record to the log in PRV to explain a change to the target file
+    repair PRV   Replace the internal checksum after having hand-edited the PRV file
 
 
 
@@ -673,9 +675,24 @@ if __name__ == "__main__":
         exit(maxresult)
 
 
+
     # All other options refer to a specific PRVFILE, so 
     # verify that before proceeding.
     prvfile = args['PRVFILE']
+
+    # This needs to be done BEFORE we pre-verify the log content
+    if args['repair']: # prvfile has been hand-edited, repair the internal checksum
+        oldtargetline,oldlogs,oldvalidationline = unpack_log_file(prvfile)
+        print(f"Got old validation line: {oldvalidationline}")
+        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        msg = "Repaired internal checksum after hand-editing this file."
+        logline = f"@ {datestr} {msg}"
+        logstamp = f"< {datestr} {oldtargetline}"
+        # assemble new content
+        newlog = f"{logline}\n{logstamp}"
+        save_prvlog_file(oldtargetline, oldlogs, newlog, prvfile)
+
+    # now proceed with validating the file
     if prvfile: 
         if os.path.isfile(prvfile):
             if verify_prvlog_contents(prvfile):
@@ -785,6 +802,7 @@ if __name__ == "__main__":
 
         notify(f"Log file {prvfile} created.")
         exit()
+
 
 
     if args['moveto']: # target file has been moved, so update the prvfile's target line
