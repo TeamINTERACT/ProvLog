@@ -9,6 +9,7 @@ Usage:
   prvlog [-v] [-H] [-m MSG] check PRVFILE
   prvlog [-v] [-H] [-m MSG] repair PRVFILE
   prvlog [-v] [-H] [-m MSG] moveto TARGURI PRVFILE
+  prvlog [-v] [-H] [-m MSG] movedir OLDROOT NEWROOT 
   prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
   prvlog [-v] [-r] -m MSG -T TARGDIR
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
@@ -33,18 +34,23 @@ Options:
     -V            Print version information
 
 Commands:
-    check PRV    Check the PRV file to verify its integrity
-    moveto URI   Target file referenced in PRVFILE has been moved to URI. Implies update.
-    update PRV   Add a record to the log in PRV to explain a change to the target file
-    repair PRV   Replace the internal checksum after having hand-edited the PRV file
-
-
+    check PRV                 Check the PRV file to verify its integrity
+    moveto URI                Target file referenced in PRVFILE has been moved to URI. Implies update.
+    movedir OLDROOT NEWROOT   Perform moveto on all prvlogs within the given OLDROOT
+    update PRV                Add a record to the log in PRV to explain a change to the target file
+    repair PRV                Replace the internal checksum after having hand-edited the PRV file
 
 TARGFILE:
     FILE:machinename:///path/to/file/on/that/machine
     POSTGRESQL:machinename:schema.tablename
     DIR://path/to/directory
 """
+
+"""
+Roadmap
+    - MOVETO on a DIR should have option to update all contained prvlog files in the hierarchy
+"""
+
 import os        # for accessing local file system
 import sys       # for printing to stderr for errors
 import hashlib   # for generating MD5 hashes
@@ -563,7 +569,35 @@ def create_log_for_target_dir(targdirpath, logmsg, report_only=True):
     # save the updated file
     save_prvlog_file(newtargetline, '', newlog, prvdirpath)
 
+
+def move_single_target(prvpath, newtargeturi):
+    """
+    Given a path to a specific prvfile and a URI to a target, 
+    update the prvfile to point to the new URI instead of the
+    one it current points to. (This is to allow for cases
+    where target files get renamed or relocated.)
+    If the update is successful, returns True.
+    If the new uri and old uri do not have the same mode
+    (FILE, DIR, etc) return False.
+    """
+    oldtargetline,oldlogs,oldvalidationline = unpack_log_file(prvpath)
+    oldmode,oldmachine,oldtargfile = unpack_uri(oldtargetline.split()[1])
+    newmode,newmachine,newtargfile = unpack_uri(newtargeturi)
+    if not oldmode == newmode:
+        notify(f"Don't know how to change mode from {oldmode} to {newmode}.  Aborting.")
+        return False
+    newtargetline = assemble_target_line(newtargeturi)
+    # now auto-create a log entry to record the path change
+    datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    msg = "Target moved to new URI"
+    logline = f"@ {datestr} {msg}"
+    logstamp = f"< {datestr} {newtargetline}"
+    # assemble new content
+    newlog = f"{logline}\n{logstamp}"
+    save_prvlog_file(newtargetline, oldlogs, newlog, prvpath)
+    return True
       
+
 # target files stored on different platforms are fingerprinted in
 # different ways, because not all storage systems have a
 # consistent way to extract a checksum.
@@ -803,25 +837,93 @@ if __name__ == "__main__":
         notify(f"Log file {prvfile} created.")
         exit()
 
-
-
     if args['moveto']: # target file has been moved, so update the prvfile's target line
-        oldtargetline,oldlogs,oldvalidationline = unpack_log_file(prvfile)
-        oldmode,oldmachine,oldtargfile = unpack_uri(oldtargetline.split()[1])
         newtargeturi = args['TARGURI']
-        newmode,newmachine,newtargfile = unpack_uri(newtargeturi)
-        if not oldmode == newmode:
-            notify(f"Don't know how to change mode from {oldmode} to {newmode}.  Aborting.")
-            exit()
-        newtargetline = assemble_target_line(newtargeturi)
-        # now auto-create a log entry to record the path change
-        datestr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        msg = "Target moved to new URI"
-        logline = f"@ {datestr} {msg}"
-        logstamp = f"< {datestr} {newtargetline}"
-        # assemble new content
-        newlog = f"{logline}\n{logstamp}"
-        save_prvlog_file(newtargetline, oldlogs, newlog, prvfile)
+        move_single_target(prvfile, newtargeturi)
+
+    if args['movedir']: # a directory has been moved/renamed and its children prvlogs all need to be updated
+        """
+        Given a current directory path that contains prvlogs
+        below it, traverse the subtree and update the target URI
+        in all prvlog files for DIR and FILE targets to have them
+        point to the new target path.
+        """
+        oldroot = args['OLDROOT']
+        newroot = args['NEWROOT']
+        if not os.path.isabs(oldroot):
+            oldroot = os.path.abspath(oldroot)
+        if not os.path.isabs(newroot):
+            newroot = os.path.abspath(newroot)
+        if not os.path.isdir(newroot):
+            notify(f"Directory '{newroot}' does not exist.  Aborting.")
+            exit(6)
+        numconsidered = 0
+        badpathroot = 0
+        missingtarget = 0
+        successes = []
+        failures = []
+        # traverse all files below the indicated root
+        for root,dirnames,fnames in os.walk(newroot):
+            for fname in fnames:
+                # reject all files that are not prvlog
+                if not fname.endswith('.prvlog'):
+                    continue
+
+                # unpack the targetURI from the prvlog
+                absfilepath = os.path.abspath(os.path.join(root,fname))
+                targetline,content,validationline = unpack_log_file(absfilepath)
+                mode,machine,oldtargfile = unpack_uri(targetline.split(maxsplit=1)[1])
+
+                # reject all prvlogs that are not DIR or FILE types
+                if not mode in ('DIR','FILE'):
+                    continue
+                numconsidered += 1
+
+                # assemble the newTargetURI
+                """
+                So I have the old target path, which points to a
+                file/dir in a hierarchy that is no longer valid.
+                The new target is constructed by clipping the
+                old root dir from the head of that path and
+                replacing it with the new root.
+                """
+                if not oldtargfile.startswith(oldroot):
+                    badpathroot += 1
+                    failures.append(absfilepath)
+                    notify(f"File's target does not match old root\n  {absfilepath}")
+                    continue
+                oldtargbase = oldtargfile[len(oldroot):]
+                if oldtargbase[0] == '/':
+                    oldtargbase = '.' + oldtargbase #ensure it's a relative path
+                newtargfile = os.path.join(newroot, oldtargbase)
+                current_machine = socket.gethostname()
+                newtarguri = f"{mode}:{current_machine}://{newtargfile}"
+                debug(f"PRV: {absfilepath}")
+                debug(f"  Old Root: {oldroot}")
+                debug(f"  New Root: {newroot}")
+                debug(f"  Old Targ: {oldtargfile}")
+                debug(f"  Old Base: {oldtargbase}")
+                debug(f"  New Targ: {newtargfile}")
+                debug(f"  New URI: {newtarguri}")
+
+                # confirm that the new target file exists and has matches the checksum in the prvfile 
+                # (to be sure it is indeed the file we should be targeting)
+                if not os.path.exists(newtargfile):
+                    missingtarget += 1
+                    failures.append(absfilepath)
+                    notify(f"File's new target doesn't exist {newtargfile} from {absfilepath}")
+                    continue
+
+                # Then finally, tell the file to update itself to the new target path
+                if move_single_target(absfilepath, newtarguri):
+                    successes.append(absfilepath)
+                    notify(f"Moved {absfilepath}")
+                else:
+                    notify(f"Problem moving {absfilepath}")
+                    failures.append(absfilepath)
+        notify(f"Considered {numconsidered} prvfiles")
+        notify(f"Moved {len(successes)} and failed on {len(failures)}")
+        notify(f"Failures were {badpathroot} bad path roots and {missingtarget} missing target files.")
 
     if args['update']: # Update PRVFILE, adding new MD5 checksum and comment if it has changed
         # read old content
@@ -889,7 +991,7 @@ if __name__ == "__main__":
             notify(f"Target path '{targetpath}' is not well-formed.")
         elif result == 2:
             notify(f"Target file referenced in {prvfile} does not exist.")
-            notify(f"Missing file: '{os.path.abspath(targetpath)}'")
+            notify(f"Missing file: '{targetpath}'")
         elif result == 3:
             notify(f"This is {current_machine} but {prvfile} was last updated on a different machine.")
             mention(f"Run prvlog with 'update' to update log and explain migration history.")
