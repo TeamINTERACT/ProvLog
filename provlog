@@ -10,7 +10,7 @@ Usage:
   prvlog [-v] [-H] [-m MSG] repair PRVFILE
   prvlog [-v] [-H] [-m MSG] moveto TARGURI PRVFILE
   prvlog [-v] [-H] [-m MSG] movedir OLDROOT NEWROOT 
-  prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE -t TARGFILE
+  prvlog [-v] [-x CHECKSUM] [-l] [-m MSG] -o PRVFILE create TARGFILE
   prvlog [-v] [-r] -m MSG -T TARGDIR
   prvlog [-v] [-H] [-a] [-r] (-s TARGDIR | -S TARGDIR)
   prvlog -h 
@@ -21,7 +21,6 @@ Options:
     -H            Check hostnames when verifying fingerprints
     -a            Test all provlog files found (default = only stale files)
     -d            Display debugging info
-    -t TARGFILE   Create new sidecar log for target TARGFILE
     -T TARGDIR    Traverse hierarchy below TARGDIR and create new sidecar for every file found
     -x CHECKSUM   Verify target still matches existing MD5 value computed earlier
     -m MSG        Use MSG for log entry instead of prompting for interactive input. 
@@ -34,6 +33,7 @@ Options:
     -V            Print version information
 
 Commands:
+    create TARGFILE           Create new sidecar log for target TARGFILE
     check PRV                 Check the PRV file to verify its integrity
     moveto URI                Target file referenced in PRVFILE has been moved to URI. Implies update.
     movedir OLDROOT NEWROOT   Perform moveto on all prvlogs within the given OLDROOT
@@ -139,7 +139,7 @@ provenance history before it was first moved into git control on
 this machine.
 
 prv log PRVFILE
-prv log -t CHKSUMFILE PRVFILE
+prv log create CHKSUMFILE PRVFILE
 prv verify PRVFILE
 """
 
@@ -774,11 +774,11 @@ if __name__ == "__main__":
                     create_log_for_target_dir(abstargpath, logmsg, report_only)
 
 
-    if args['-t']: # Create prvlog file for new target
+    if args['create']: # Create prvlog file for new target
         prevmd5 = None
         if args['-x']:
             prevmd5 = args['-x'].strip()
-        targfile = args['-t']
+        targfile = args['TARGFILE']
         if not prvfile:
             if args['-o']:
                 prvfile = args['-o']
@@ -939,7 +939,7 @@ if __name__ == "__main__":
             uri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
         elif mode == 'DIR':
             absuri, fingerprint = fingerprint_local_dir(targfile)
-            uri = f"FILE:{current_machine}://{os.path.abspath(targfile)}"
+            uri = f"DIR:{current_machine}://{os.path.abspath(targfile)}"
         elif mode == 'POSTGRESQL':
             absuri, fingerprint = fingerprint_postgresql_table(machine + ':' + targfile)
             uri = f"POSTGRESQL:{machine}:{targfile}"
