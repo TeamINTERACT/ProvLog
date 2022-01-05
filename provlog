@@ -801,6 +801,7 @@ if __name__ == "__main__":
         #prvfile = targpath + ".prvlog" # the version without the FILE: or POSTGRES: prefix
 
         # assemble the header row info
+        notify("Computing fingerprint of target file...")
         fingerprinter = fingerprinters[targtype]
         absuri,fingerprint = fingerprinter(targpath)
         notify(f"Absolute URI of target: {absuri}")
