@@ -2,5 +2,9 @@
 *.swp
 *.prvlog
 *.md5
+*.txt
 temp/
+cache/
+foo/
+old-bkup/
 JASNotes.md
